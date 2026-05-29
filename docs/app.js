@@ -148,8 +148,8 @@ function renderConnectionStatus(config, remoteState) {
 
   dots.forEach((dot) => dot.classList.remove("connected"));
   if (!serverAvailable) {
-    whatsappText.textContent = "Abre la app con el servidor local para recibir webhooks de WhatsApp Cloud API.";
-    adsText.textContent = "Abre la app con el servidor local para sincronizar anuncios activos desde Meta Ads API.";
+    whatsappText.textContent = "No pude conectar con el backend. Revisa internet o intenta recargar el panel.";
+    adsText.textContent = "No pude conectar con el backend para sincronizar anuncios activos desde Meta Ads API.";
     syncButton.disabled = true;
     return;
   }
@@ -158,7 +158,7 @@ function renderConnectionStatus(config, remoteState) {
   if (config.whatsappWebhookConfigured) {
     dots[0].classList.add("connected");
     const phoneStatus = config.whatsappPhoneConfigured ? "Número real configurado." : "Falta WHATSAPP_PHONE_NUMBER_ID para responder desde el CRM.";
-    whatsappText.textContent = `Webhook listo. ${phoneStatus} Último mensaje recibido: ${remoteState.lastWebhookAt || "todavía ninguno"}.`;
+    whatsappText.textContent = `Webhook guardado. ${phoneStatus} Último evento recibido: ${remoteState.lastWebhookAt || "todavía ninguno"}. Los contactos aparecerán cuando Meta entregue mensajes reales de producción.`;
   } else {
     whatsappText.textContent = "Falta WHATSAPP_VERIFY_TOKEN en .env para verificar el webhook de Meta.";
   }
@@ -224,15 +224,20 @@ function findLeadForSale(sale) {
 
 function getPerformance() {
   const map = new Map();
+  const liveAdKeys = new Set();
 
   for (const ad of state.ads || []) {
     const key = ad.id || `${ad.campaign || "Sin campaña"}::${ad.name || "Sin anuncio"}`;
+    liveAdKeys.add(key);
+    const metaMessages = Number(ad.messages || 0);
     map.set(key, {
       key,
       campaign: ad.campaign || "Sin campaña",
       ad: ad.name || "Sin anuncio",
       adId: ad.id || "",
       leads: 0,
+      trackedLeads: 0,
+      messages: metaMessages,
       sales: 0,
       revenue: 0,
       spend: Number(ad.spend || 0),
@@ -249,13 +254,18 @@ function getPerformance() {
         ad: lead.ad || "Sin anuncio",
         adId: lead.adId || "",
         leads: 0,
+        trackedLeads: 0,
+        messages: 0,
         sales: 0,
         revenue: 0,
         spend: 0,
         dailyBudget: 0,
       });
     }
-    map.get(key).leads += 1;
+    const row = map.get(key);
+    row.leads += 1;
+    row.trackedLeads += 1;
+    row.messages = Math.max(Number(row.messages || 0), row.trackedLeads);
   }
 
   for (const spend of state.spend) {
@@ -267,6 +277,8 @@ function getPerformance() {
         ad: spend.ad || "Sin anuncio",
         adId: spend.adId || "",
         leads: 0,
+        trackedLeads: 0,
+        messages: 0,
         sales: 0,
         revenue: 0,
         spend: 0,
@@ -274,7 +286,9 @@ function getPerformance() {
       });
     }
     const row = map.get(key);
-    row.spend += Number(spend.spend || 0);
+    row.spend = liveAdKeys.has(key)
+      ? Math.max(Number(row.spend || 0), Number(spend.spend || 0))
+      : Number(row.spend || 0) + Number(spend.spend || 0);
     row.dailyBudget = Math.max(row.dailyBudget, Number(spend.dailyBudget || 0));
   }
 
@@ -289,6 +303,8 @@ function getPerformance() {
         ad: lead.ad || "Sin anuncio",
         adId: lead.adId || "",
         leads: 0,
+        trackedLeads: 0,
+        messages: 0,
         sales: 0,
         revenue: 0,
         spend: 0,
@@ -303,10 +319,12 @@ function getPerformance() {
   return [...map.values()].map((row) => {
     const cpa = row.sales > 0 ? row.spend / row.sales : 0;
     const roas = row.spend > 0 ? row.revenue / row.spend : 0;
+    const costPerMessage = row.messages > 0 ? row.spend / row.messages : 0;
     return {
       ...row,
       cpa,
       roas,
+      costPerMessage,
       recommendation: recommend(row, cpa, roas),
     };
   });
@@ -314,7 +332,7 @@ function getPerformance() {
 
 function recommend(row, cpa, roas) {
   const rules = state.rules;
-  if (row.leads < Number(rules.minLeads)) return "hold";
+  if (row.messages < Number(rules.minLeads)) return "hold";
   if (row.sales === 0 && row.spend > Number(rules.targetCpa)) return "pause";
   if (row.sales > 0 && (cpa > Number(rules.targetCpa) * 1.35 || roas < Number(rules.minRoas) * 0.65)) return "reduce";
   if (row.sales > 0 && cpa <= Number(rules.targetCpa) && roas >= Number(rules.minRoas)) return "scale";
@@ -344,11 +362,15 @@ function render() {
 function renderMetrics() {
   const performance = getPerformance();
   const spend = performance.reduce((sum, item) => sum + item.spend, 0);
+  const messages = performance.reduce((sum, item) => sum + Number(item.messages || 0), 0);
   const revenue = state.sales.reduce((sum, sale) => sum + Number(sale.amount || 0), 0);
   const cpa = state.sales.length ? spend / state.sales.length : 0;
   const roas = spend ? revenue / spend : 0;
+  const costPerMessage = messages ? spend / messages : 0;
   document.getElementById("metricSpend").textContent = money.format(spend);
   document.getElementById("metricRevenue").textContent = money.format(revenue);
+  document.getElementById("metricMessages").textContent = numberFormat.format(messages);
+  document.getElementById("metricCostPerMessage").textContent = money.format(costPerMessage);
   document.getElementById("metricRoas").textContent = `${numberFormat.format(roas)}x`;
   document.getElementById("metricCpa").textContent = money.format(cpa);
 }
@@ -361,7 +383,7 @@ function renderPerformance() {
     .sort((a, b) => b.revenue - a.revenue || b.spend - a.spend);
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="9" class="empty">Todavía no hay datos suficientes.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="empty">Todavía no hay datos suficientes.</td></tr>`;
     return;
   }
 
@@ -372,9 +394,10 @@ function renderPerformance() {
           <td>${escapeHtml(row.ad)}</td>
           <td>${escapeHtml(row.campaign)}</td>
           <td>${money.format(row.spend)}</td>
-          <td>${row.leads}</td>
+          <td>${numberFormat.format(row.messages || 0)}</td>
           <td>${row.sales}</td>
           <td>${money.format(row.revenue)}</td>
+          <td>${row.messages ? money.format(row.costPerMessage) : "Sin mensajes"}</td>
           <td>${row.sales ? money.format(row.cpa) : "Sin ventas"}</td>
           <td>${row.spend ? `${numberFormat.format(row.roas)}x` : "0.00x"}</td>
           <td><span class="badge ${row.recommendation}">${recommendationLabel(row.recommendation)}</span></td>
@@ -433,7 +456,7 @@ function renderSalesTable() {
 function renderLeadsTable() {
   const tbody = document.getElementById("leadsTable");
   if (!state.leads.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">Los leads aparecerán aquí cuando conectemos WhatsApp Cloud API.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">Aquí aparecerán contactos con número cuando el webhook de WhatsApp entregue mensajes reales con referencia del anuncio.</td></tr>`;
     return;
   }
 

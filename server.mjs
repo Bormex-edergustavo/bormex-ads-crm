@@ -373,10 +373,11 @@ async function fetchAllPages(firstUrl) {
 function normalizeMetaAd(ad) {
   const insights = ad.insights?.data?.[0] || {};
   const actions = insights.actions || [];
-  const messageAction = actions.find((item) =>
-    String(item.action_type || "").includes("messaging") ||
-    String(item.action_type || "").includes("onsite_conversion.messaging"),
-  );
+  const messages = pickActionValue(actions, [
+    "onsite_conversion.messaging_conversation_started_7d",
+    "onsite_conversion.total_messaging_connection",
+    "onsite_conversion.messaging_first_reply",
+  ]);
   return {
     id: ad.id,
     name: ad.name || "Sin nombre",
@@ -390,8 +391,17 @@ function normalizeMetaAd(ad) {
     spend: Number(insights.spend || 0),
     impressions: Number(insights.impressions || 0),
     clicks: Number(insights.clicks || 0),
-    messages: Number(messageAction?.value || 0),
+    messages,
+    metaLeads: pickActionValue(actions, ["onsite_conversion.lead_grouped", "onsite_conversion.lead", "lead"]),
   };
+}
+
+function pickActionValue(actions, actionTypes) {
+  for (const actionType of actionTypes) {
+    const found = actions.find((item) => item.action_type === actionType);
+    if (found) return Number(found.value || 0);
+  }
+  return 0;
 }
 
 function centsToMoney(value) {

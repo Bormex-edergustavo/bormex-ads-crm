@@ -52,8 +52,16 @@
               <strong id="metricSpend">$0</strong>
             </article>
             <article class="metric">
-              <span>Ventas</span>
+              <span>Ingresos</span>
               <strong id="metricRevenue">$0</strong>
+            </article>
+            <article class="metric">
+              <span>Mensajes</span>
+              <strong id="metricMessages">0</strong>
+            </article>
+            <article class="metric">
+              <span>Costo mensaje</span>
+              <strong id="metricCostPerMessage">$0</strong>
             </article>
             <article class="metric">
               <span>ROAS</span>
@@ -70,7 +78,7 @@
               <div class="panel-header">
                 <div>
                   <h2>Rendimiento por anuncio</h2>
-                  <p>Ventas atribuidas por número de WhatsApp.</p>
+                  <p>Mensajes de Meta y ventas atribuidas por número de WhatsApp.</p>
                 </div>
                 <select id="statusFilter" aria-label="Filtro de recomendación">
                   <option value="all">Todos</option>
@@ -87,10 +95,11 @@
                       <th>Anuncio</th>
                       <th>Campaña</th>
                       <th>Gasto</th>
-                      <th>Leads</th>
+                      <th>Mensajes Meta</th>
                       <th>Ventas</th>
                       <th>Ingresos</th>
-                      <th>CPA</th>
+                      <th>Costo mensaje</th>
+                      <th>Costo venta</th>
                       <th>ROAS</th>
                       <th>Acción</th>
                     </tr>
@@ -226,14 +235,14 @@
             <div class="panel-header">
               <div>
                 <h2>Leads de WhatsApp</h2>
-                <p>Se detectarán automáticamente desde WhatsApp Cloud API.</p>
+                <p>Contactos reales detectados desde WhatsApp Cloud API.</p>
               </div>
             </div>
             <div class="connection-panel">
               <span class="connection-dot pending"></span>
               <div>
                 <strong>Conexión pendiente</strong>
-                <p id="whatsappConnectionText">Cuando conectemos WhatsApp Cloud API, cada mensaje nuevo de un anuncio se guardará aquí con número, campaña, anuncio y referencia del anuncio.</p>
+                <p id="whatsappConnectionText">Los conteos por anuncio vienen de Meta Ads; aquí aparecerán los contactos con número cuando WhatsApp entregue el webhook real.</p>
               </div>
             </div>
           </section>
@@ -242,7 +251,7 @@
             <div class="panel-header">
               <div>
                 <h2>Leads registrados</h2>
-                <p>Base automática usada para atribuir ventas por número.</p>
+                <p>Base automática con número usada para atribuir ventas.</p>
               </div>
               <button class="secondary-button" id="exportLeadsCsv" type="button">Exportar CSV</button>
             </div>
@@ -356,7 +365,7 @@
                   <input name="minRoas" inputmode="decimal" />
                 </label>
                 <label>
-                  Mínimo de leads para decidir
+                  Mínimo de mensajes para decidir
                   <input name="minLeads" inputmode="numeric" />
                 </label>
                 <button class="primary-button" type="submit">Guardar reglas</button>
