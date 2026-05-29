@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
+    <title>Ventas por anuncio</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">VA</span>
+          <div>
+            <strong>Ventas Ads</strong>
+            <span>WhatsApp + Meta</span>
+          </div>
+        </div>
+
+        <nav class="nav" aria-label="Secciones">
+          <button class="nav-item active" data-view="dashboard">Panel</button>
+          <button class="nav-item" data-view="crm">CRM</button>
+          <button class="nav-item" data-view="sales">Ventas</button>
+          <button class="nav-item" data-view="leads">Leads</button>
+          <button class="nav-item" data-view="ads">Anuncios</button>
+          <button class="nav-item" data-view="settings">Datos</button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <span id="storageStatus">Guardado local</span>
+          <button class="ghost-button" id="clearDemoData" type="button">Reiniciar datos</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Seguimiento comercial</p>
+            <h1 id="viewTitle">Panel</h1>
+          </div>
+          <div class="topbar-actions">
+            <button class="secondary-button" id="exportJson" type="button">Exportar JSON</button>
+            <button class="primary-button" data-open-sale type="button">Registrar venta</button>
+          </div>
+        </header>
+
+        <section class="view active" id="dashboardView">
+          <div class="metric-grid">
+            <article class="metric">
+              <span>Gasto</span>
+              <strong id="metricSpend">$0</strong>
+            </article>
+            <article class="metric">
+              <span>Ventas</span>
+              <strong id="metricRevenue">$0</strong>
+            </article>
+            <article class="metric">
+              <span>ROAS</span>
+              <strong id="metricRoas">0.00x</strong>
+            </article>
+            <article class="metric">
+              <span>Costo por venta</span>
+              <strong id="metricCpa">$0</strong>
+            </article>
+          </div>
+
+          <div class="content-grid">
+            <section class="panel wide">
+              <div class="panel-header">
+                <div>
+                  <h2>Rendimiento por anuncio</h2>
+                  <p>Ventas atribuidas por número de WhatsApp.</p>
+                </div>
+                <select id="statusFilter" aria-label="Filtro de recomendación">
+                  <option value="all">Todos</option>
+                  <option value="scale">Subir</option>
+                  <option value="hold">Mantener</option>
+                  <option value="reduce">Bajar</option>
+                  <option value="pause">Pausar</option>
+                </select>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Anuncio</th>
+                      <th>Campaña</th>
+                      <th>Gasto</th>
+                      <th>Leads</th>
+                      <th>Ventas</th>
+                      <th>Ingresos</th>
+                      <th>CPA</th>
+                      <th>ROAS</th>
+                      <th>Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody id="adsPerformanceTable"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Ventas recientes</h2>
+                  <p>Últimos cierres registrados.</p>
+                </div>
+              </div>
+              <div class="activity-list" id="recentSales"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="crmView">
+          <section class="crm-shell">
+            <div class="crm-list-panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Inbox</h2>
+                  <p>WhatsApp, Messenger e Instagram.</p>
+                </div>
+                <select id="crmChannelFilter" aria-label="Canal">
+                  <option value="all">Todos</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="messenger">Messenger</option>
+                  <option value="instagram">Instagram</option>
+                </select>
+              </div>
+              <div class="conversation-list" id="conversationList"></div>
+            </div>
+
+            <div class="crm-thread-panel">
+              <div class="thread-header" id="threadHeader">
+                <div>
+                  <h2>Selecciona una conversación</h2>
+                  <p>Los mensajes nuevos aparecerán aquí cuando llegue el webhook.</p>
+                </div>
+              </div>
+              <div class="message-thread" id="messageThread"></div>
+              <form class="reply-box" id="replyForm">
+                <textarea name="text" rows="2" placeholder="Escribe una respuesta"></textarea>
+                <button class="primary-button" type="submit">Enviar</button>
+              </form>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="salesView">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Registrar venta</h2>
+                <p>El número se normaliza para buscar el anuncio original.</p>
+              </div>
+            </div>
+            <form class="form-grid" id="saleForm">
+              <label>
+                Número de WhatsApp
+                <input name="phone" autocomplete="tel" placeholder="+52 999 123 4567" required />
+              </label>
+              <label class="full">
+                Productos vendidos
+                <div class="checkbox-grid">
+                  <label class="check-option">
+                    <input name="products" type="checkbox" value="Imán" />
+                    <span>Imán</span>
+                  </label>
+                  <label class="check-option">
+                    <input name="products" type="checkbox" value="Pin" />
+                    <span>Pin</span>
+                  </label>
+                  <label class="check-option">
+                    <input name="products" type="checkbox" value="Llavero" />
+                    <span>Llavero</span>
+                  </label>
+                  <label class="check-option">
+                    <input name="products" type="checkbox" value="Termoadherible" />
+                    <span>Termoadherible</span>
+                  </label>
+                </div>
+              </label>
+              <label>
+                Monto vendido
+                <input name="amount" inputmode="decimal" placeholder="2500" required />
+              </label>
+              <label>
+                Fecha
+                <input name="date" type="date" required />
+              </label>
+              <div class="form-actions full">
+                <button class="primary-button" type="submit">Guardar venta</button>
+                <button class="secondary-button" id="fillSaleExample" type="button">Ejemplo</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Historial de ventas</h2>
+                <p>Coincidencia automática por número.</p>
+              </div>
+              <button class="secondary-button" id="exportSalesCsv" type="button">Exportar CSV</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Número</th>
+                    <th>Producto</th>
+                    <th>Monto</th>
+                    <th>Anuncio atribuido</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="salesTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="leadsView">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Leads de WhatsApp</h2>
+                <p>Se detectarán automáticamente desde WhatsApp Cloud API.</p>
+              </div>
+            </div>
+            <div class="connection-panel">
+              <span class="connection-dot pending"></span>
+              <div>
+                <strong>Conexión pendiente</strong>
+                <p id="whatsappConnectionText">Cuando conectemos WhatsApp Cloud API, cada mensaje nuevo de un anuncio se guardará aquí con número, campaña, anuncio y referencia del anuncio.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Leads registrados</h2>
+                <p>Base automática usada para atribuir ventas por número.</p>
+              </div>
+              <button class="secondary-button" id="exportLeadsCsv" type="button">Exportar CSV</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Número</th>
+                    <th>Campaña</th>
+                    <th>Anuncio</th>
+                    <th>ID</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="leadsTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="adsView">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Gasto por anuncio</h2>
+                <p>Se detectará automáticamente desde Meta Ads API.</p>
+              </div>
+            </div>
+            <div class="connection-panel">
+              <span class="connection-dot pending"></span>
+              <div>
+                <strong>Conexión pendiente</strong>
+                <p id="adsConnectionText">Cuando conectemos Meta Ads API, aquí aparecerán solo anuncios activos con gasto, presupuesto, campaña y métricas de mensajes.</p>
+                <button class="secondary-button compact" id="syncAds" type="button">Sincronizar anuncios activos</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Registros de gasto</h2>
+                <p>Resumen automático de inversión por anuncio activo.</p>
+              </div>
+              <button class="secondary-button" id="exportSpendCsv" type="button">Exportar CSV</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Campaña</th>
+                    <th>Anuncio</th>
+                    <th>Gasto</th>
+                    <th>Presupuesto</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="spendTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="settingsView">
+          <div class="content-grid">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Importar datos</h2>
+                  <p>Formato CSV simple para migrar o respaldar.</p>
+                </div>
+              </div>
+              <div class="import-grid">
+                <label>
+                  Tipo de datos
+                  <select id="importType">
+                    <option value="sales">Ventas</option>
+                    <option value="leads">Leads</option>
+                    <option value="spend">Gasto</option>
+                  </select>
+                </label>
+                <label>
+                  Archivo CSV
+                  <input id="csvInput" type="file" accept=".csv,text/csv" />
+                </label>
+                <button class="primary-button" id="importCsv" type="button">Importar CSV</button>
+              </div>
+              <div class="hint">
+                Ventas: phone,product,amount,date<br />
+                Leads: phone,campaign,adset,ad,adId,date,message<br />
+                Gasto: campaign,ad,adId,spend,dailyBudget,date
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Reglas de decisión</h2>
+                  <p>Usadas para sugerir subir, bajar o pausar.</p>
+                </div>
+              </div>
+              <form class="rules-form" id="rulesForm">
+                <label>
+                  Costo por venta ideal
+                  <input name="targetCpa" inputmode="decimal" />
+                </label>
+                <label>
+                  ROAS mínimo
+                  <input name="minRoas" inputmode="decimal" />
+                </label>
+                <label>
+                  Mínimo de leads para decidir
+                  <input name="minLeads" inputmode="numeric" />
+                </label>
+                <button class="primary-button" type="submit">Guardar reglas</button>
+              </form>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,4 @@
+project_id = "tnajelbyzkrifukfgnxv"
+
+[functions.bormex-crm]
+verify_jwt = false

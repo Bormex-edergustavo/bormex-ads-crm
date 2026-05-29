@@ -1,0 +1,11 @@
+{
+  "name": "bormex-ads-crm",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:edge": "node scripts/build-edge.mjs",
+    "build:static": "node scripts/build-static.mjs",
+    "check": "node --check server.mjs && node --check app.js && node scripts/build-edge.mjs"
+  }
+}

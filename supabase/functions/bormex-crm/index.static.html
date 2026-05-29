@@ -1,0 +1,2093 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="bormex-api-base" content="" />
+    <title>Ventas por anuncio</title>
+    <style>
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface-muted: #eef2f5;
+  --text: #16202a;
+  --muted: #697586;
+  --border: #d7dde5;
+  --primary: #0f766e;
+  --primary-strong: #115e59;
+  --accent: #be6a15;
+  --danger: #b42318;
+  --warning: #a15c07;
+  --success: #16803c;
+  --shadow: 0 16px 40px rgba(22, 32, 42, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}
+
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 32, 0.72);
+}
+
+.auth-card {
+  width: min(100%, 360px);
+  display: grid;
+  gap: 14px;
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.auth-card .brand-mark {
+  margin-bottom: 2px;
+}
+
+.auth-card h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.auth-card label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.auth-card input {
+  min-height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--text);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  background: #17212b;
+  color: #eef4f8;
+  display: flex;
+  flex-direction: column;
+  padding: 22px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  background: #0f766e;
+  color: #ffffff;
+  font-weight: 800;
+}
+
+.brand strong,
+.brand span {
+  display: block;
+}
+
+.brand span:not(.brand-mark) {
+  color: #aeb9c5;
+  font-size: 13px;
+}
+
+.nav {
+  display: grid;
+  gap: 6px;
+  margin-top: 34px;
+}
+
+.nav-item {
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #c8d2dc;
+  padding: 11px 12px;
+  text-align: left;
+}
+
+.nav-item:hover,
+.nav-item.active {
+  background: #263342;
+  color: #ffffff;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  display: grid;
+  gap: 10px;
+  color: #aeb9c5;
+  font-size: 13px;
+}
+
+.main {
+  min-width: 0;
+  padding: 28px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0;
+  font-size: 30px;
+}
+
+h2 {
+  margin-bottom: 4px;
+  font-size: 18px;
+}
+
+.topbar-actions,
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.primary-button,
+.secondary-button,
+.ghost-button,
+.danger-button {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  min-height: 40px;
+  padding: 0 14px;
+  font-weight: 700;
+}
+
+.primary-button {
+  background: var(--primary);
+  color: #ffffff;
+}
+
+.primary-button:hover {
+  background: var(--primary-strong);
+}
+
+.secondary-button {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.compact {
+  margin-top: 12px;
+  min-height: 34px;
+}
+
+.ghost-button {
+  background: transparent;
+  border-color: #405164;
+  color: #eef4f8;
+}
+
+.danger-button {
+  background: #fff5f4;
+  border-color: #f4c7c3;
+  color: var(--danger);
+}
+
+.view {
+  display: none;
+}
+
+.view.active {
+  display: grid;
+  gap: 18px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 14px;
+}
+
+.metric,
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.metric {
+  padding: 18px;
+}
+
+.metric span {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.metric strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 26px;
+}
+
+.content-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.8fr);
+  gap: 18px;
+}
+
+.panel {
+  min-width: 0;
+  padding: 18px;
+}
+
+.panel.wide {
+  min-width: 0;
+}
+
+.panel-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.panel-header p {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 760px;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--border);
+  padding: 11px 10px;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+th {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+td {
+  font-size: 14px;
+}
+
+.empty {
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.badge.scale {
+  background: #e8f7ee;
+  color: var(--success);
+}
+
+.badge.hold {
+  background: #eef2f5;
+  color: #455468;
+}
+
+.badge.reduce {
+  background: #fff2dd;
+  color: var(--warning);
+}
+
+.badge.pause {
+  background: #fff0ee;
+  color: var(--danger);
+}
+
+.form-grid,
+.import-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(170px, 1fr));
+  gap: 14px;
+}
+
+label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+  min-height: 42px;
+  padding: 9px 11px;
+}
+
+textarea {
+  min-height: 86px;
+  resize: vertical;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--primary);
+  outline: 3px solid rgba(15, 118, 110, 0.18);
+}
+
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.check-option {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  display: flex;
+  flex-direction: row;
+  font-weight: 700;
+  gap: 8px;
+  min-height: 42px;
+  padding: 8px 10px;
+}
+
+.check-option input {
+  accent-color: var(--primary);
+  min-height: 18px;
+  width: 18px;
+}
+
+.connection-panel {
+  align-items: flex-start;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+}
+
+.connection-panel strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.connection-panel p {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 0;
+}
+
+.connection-dot {
+  border-radius: 999px;
+  flex: 0 0 auto;
+  height: 10px;
+  margin-top: 5px;
+  width: 10px;
+}
+
+.connection-dot.pending {
+  background: var(--warning);
+}
+
+.connection-dot.connected {
+  background: var(--success);
+}
+
+.full {
+  grid-column: 1 / -1;
+}
+
+.activity-list {
+  display: grid;
+  gap: 10px;
+}
+
+.activity-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.activity-item strong,
+.activity-item span {
+  display: block;
+}
+
+.activity-item span {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.crm-shell {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.35fr) minmax(0, 1fr);
+  gap: 18px;
+  min-height: calc(100vh - 150px);
+}
+
+.crm-list-panel,
+.crm-thread-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  min-width: 0;
+  padding: 18px;
+}
+
+.crm-list-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.conversation-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.conversation-item {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  display: grid;
+  gap: 5px;
+  min-height: 82px;
+  padding: 11px;
+  text-align: left;
+}
+
+.conversation-item.active,
+.conversation-item:hover {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.conversation-item strong,
+.conversation-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-item small {
+  color: var(--muted);
+}
+
+.channel-pill {
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 800;
+  justify-self: start;
+  padding: 3px 7px;
+}
+
+.channel-pill.whatsapp {
+  background: #e8f7ee;
+  color: #16803c;
+}
+
+.channel-pill.messenger {
+  background: #eaf2ff;
+  color: #2563eb;
+}
+
+.channel-pill.instagram {
+  background: #fff0f5;
+  color: #be185d;
+}
+
+.crm-thread-panel {
+  display: grid;
+  grid-template-rows: auto minmax(280px, 1fr) auto;
+  gap: 14px;
+}
+
+.thread-header {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+
+.thread-header p {
+  color: var(--muted);
+  font-size: 14px;
+  margin-bottom: 0;
+}
+
+.message-thread {
+  align-content: end;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+.message-bubble {
+  border-radius: 8px;
+  max-width: min(680px, 82%);
+  padding: 10px 12px;
+}
+
+.message-bubble.inbound {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  justify-self: start;
+}
+
+.message-bubble.outbound {
+  background: var(--primary);
+  color: #ffffff;
+  justify-self: end;
+}
+
+.message-bubble p {
+  margin-bottom: 5px;
+  white-space: pre-wrap;
+}
+
+.message-bubble span {
+  display: block;
+  font-size: 11px;
+  opacity: 0.72;
+}
+
+.reply-box {
+  align-items: end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.reply-box.disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.hint {
+  margin-top: 16px;
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: #455468;
+  font-size: 13px;
+  line-height: 1.7;
+  padding: 12px;
+}
+
+.rules-form {
+  display: grid;
+  gap: 14px;
+}
+
+.toast {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  max-width: 360px;
+  border-radius: 8px;
+  background: #17212b;
+  color: #ffffff;
+  opacity: 0;
+  pointer-events: none;
+  padding: 12px 14px;
+  transform: translateY(10px);
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (max-width: 980px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    padding: 14px;
+  }
+
+  .brand,
+  .sidebar-footer {
+    display: none;
+  }
+
+  .nav {
+    display: flex;
+    gap: 8px;
+    margin-top: 0;
+    overflow-x: auto;
+  }
+
+  .nav-item {
+    flex: 0 0 auto;
+  }
+
+  .main {
+    padding: 18px;
+  }
+
+  .topbar,
+  .panel-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .metric-grid,
+  .content-grid,
+  .crm-shell,
+  .form-grid,
+  .import-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .crm-shell {
+    min-height: auto;
+  }
+
+  .reply-box {
+    grid-template-columns: 1fr;
+  }
+
+  h1 {
+    font-size: 26px;
+  }
+}
+
+</style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">VA</span>
+          <div>
+            <strong>Ventas Ads</strong>
+            <span>WhatsApp + Meta</span>
+          </div>
+        </div>
+
+        <nav class="nav" aria-label="Secciones">
+          <button class="nav-item active" data-view="dashboard">Panel</button>
+          <button class="nav-item" data-view="crm">CRM</button>
+          <button class="nav-item" data-view="sales">Ventas</button>
+          <button class="nav-item" data-view="leads">Leads</button>
+          <button class="nav-item" data-view="ads">Anuncios</button>
+          <button class="nav-item" data-view="settings">Datos</button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <span id="storageStatus">Guardado local</span>
+          <button class="ghost-button" id="clearDemoData" type="button">Reiniciar datos</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Seguimiento comercial</p>
+            <h1 id="viewTitle">Panel</h1>
+          </div>
+          <div class="topbar-actions">
+            <button class="secondary-button" id="exportJson" type="button">Exportar JSON</button>
+            <button class="primary-button" data-open-sale type="button">Registrar venta</button>
+          </div>
+        </header>
+
+        <section class="view active" id="dashboardView">
+          <div class="metric-grid">
+            <article class="metric">
+              <span>Gasto</span>
+              <strong id="metricSpend">$0</strong>
+            </article>
+            <article class="metric">
+              <span>Ventas</span>
+              <strong id="metricRevenue">$0</strong>
+            </article>
+            <article class="metric">
+              <span>ROAS</span>
+              <strong id="metricRoas">0.00x</strong>
+            </article>
+            <article class="metric">
+              <span>Costo por venta</span>
+              <strong id="metricCpa">$0</strong>
+            </article>
+          </div>
+
+          <div class="content-grid">
+            <section class="panel wide">
+              <div class="panel-header">
+                <div>
+                  <h2>Rendimiento por anuncio</h2>
+                  <p>Ventas atribuidas por número de WhatsApp.</p>
+                </div>
+                <select id="statusFilter" aria-label="Filtro de recomendación">
+                  <option value="all">Todos</option>
+                  <option value="scale">Subir</option>
+                  <option value="hold">Mantener</option>
+                  <option value="reduce">Bajar</option>
+                  <option value="pause">Pausar</option>
+                </select>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Anuncio</th>
+                      <th>Campaña</th>
+                      <th>Gasto</th>
+                      <th>Leads</th>
+                      <th>Ventas</th>
+                      <th>Ingresos</th>
+                      <th>CPA</th>
+                      <th>ROAS</th>
+                      <th>Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody id="adsPerformanceTable"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Ventas recientes</h2>
+                  <p>Últimos cierres registrados.</p>
+                </div>
+              </div>
+              <div class="activity-list" id="recentSales"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="crmView">
+          <section class="crm-shell">
+            <div class="crm-list-panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Inbox</h2>
+                  <p>WhatsApp, Messenger e Instagram.</p>
+                </div>
+                <select id="crmChannelFilter" aria-label="Canal">
+                  <option value="all">Todos</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="messenger">Messenger</option>
+                  <option value="instagram">Instagram</option>
+                </select>
+              </div>
+              <div class="conversation-list" id="conversationList"></div>
+            </div>
+
+            <div class="crm-thread-panel">
+              <div class="thread-header" id="threadHeader">
+                <div>
+                  <h2>Selecciona una conversación</h2>
+                  <p>Los mensajes nuevos aparecerán aquí cuando llegue el webhook.</p>
+                </div>
+              </div>
+              <div class="message-thread" id="messageThread"></div>
+              <form class="reply-box" id="replyForm">
+                <textarea name="text" rows="2" placeholder="Escribe una respuesta"></textarea>
+                <button class="primary-button" type="submit">Enviar</button>
+              </form>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="salesView">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Registrar venta</h2>
+                <p>El número se normaliza para buscar el anuncio original.</p>
+              </div>
+            </div>
+            <form class="form-grid" id="saleForm">
+              <label>
+                Número de WhatsApp
+                <input name="phone" autocomplete="tel" placeholder="+52 999 123 4567" required />
+              </label>
+              <label class="full">
+                Productos vendidos
+                <div class="checkbox-grid">
+                  <label class="check-option">
+                    <input name="products" type="checkbox" value="Imán" />
+                    <span>Imán</span>
+                  </label>
+                  <label class="check-option">
+                    <input name="products" type="checkbox" value="Pin" />
+                    <span>Pin</span>
+                  </label>
+                  <label class="check-option">
+                    <input name="products" type="checkbox" value="Llavero" />
+                    <span>Llavero</span>
+                  </label>
+                  <label class="check-option">
+                    <input name="products" type="checkbox" value="Termoadherible" />
+                    <span>Termoadherible</span>
+                  </label>
+                </div>
+              </label>
+              <label>
+                Monto vendido
+                <input name="amount" inputmode="decimal" placeholder="2500" required />
+              </label>
+              <label>
+                Fecha
+                <input name="date" type="date" required />
+              </label>
+              <div class="form-actions full">
+                <button class="primary-button" type="submit">Guardar venta</button>
+                <button class="secondary-button" id="fillSaleExample" type="button">Ejemplo</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Historial de ventas</h2>
+                <p>Coincidencia automática por número.</p>
+              </div>
+              <button class="secondary-button" id="exportSalesCsv" type="button">Exportar CSV</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Número</th>
+                    <th>Producto</th>
+                    <th>Monto</th>
+                    <th>Anuncio atribuido</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="salesTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="leadsView">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Leads de WhatsApp</h2>
+                <p>Se detectarán automáticamente desde WhatsApp Cloud API.</p>
+              </div>
+            </div>
+            <div class="connection-panel">
+              <span class="connection-dot pending"></span>
+              <div>
+                <strong>Conexión pendiente</strong>
+                <p id="whatsappConnectionText">Cuando conectemos WhatsApp Cloud API, cada mensaje nuevo de un anuncio se guardará aquí con número, campaña, anuncio y referencia del anuncio.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Leads registrados</h2>
+                <p>Base automática usada para atribuir ventas por número.</p>
+              </div>
+              <button class="secondary-button" id="exportLeadsCsv" type="button">Exportar CSV</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Número</th>
+                    <th>Campaña</th>
+                    <th>Anuncio</th>
+                    <th>ID</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="leadsTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="adsView">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Gasto por anuncio</h2>
+                <p>Se detectará automáticamente desde Meta Ads API.</p>
+              </div>
+            </div>
+            <div class="connection-panel">
+              <span class="connection-dot pending"></span>
+              <div>
+                <strong>Conexión pendiente</strong>
+                <p id="adsConnectionText">Cuando conectemos Meta Ads API, aquí aparecerán solo anuncios activos con gasto, presupuesto, campaña y métricas de mensajes.</p>
+                <button class="secondary-button compact" id="syncAds" type="button">Sincronizar anuncios activos</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Registros de gasto</h2>
+                <p>Resumen automático de inversión por anuncio activo.</p>
+              </div>
+              <button class="secondary-button" id="exportSpendCsv" type="button">Exportar CSV</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Campaña</th>
+                    <th>Anuncio</th>
+                    <th>Gasto</th>
+                    <th>Presupuesto</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="spendTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="settingsView">
+          <div class="content-grid">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Importar datos</h2>
+                  <p>Formato CSV simple para migrar o respaldar.</p>
+                </div>
+              </div>
+              <div class="import-grid">
+                <label>
+                  Tipo de datos
+                  <select id="importType">
+                    <option value="sales">Ventas</option>
+                    <option value="leads">Leads</option>
+                    <option value="spend">Gasto</option>
+                  </select>
+                </label>
+                <label>
+                  Archivo CSV
+                  <input id="csvInput" type="file" accept=".csv,text/csv" />
+                </label>
+                <button class="primary-button" id="importCsv" type="button">Importar CSV</button>
+              </div>
+              <div class="hint">
+                Ventas: phone,product,amount,date<br />
+                Leads: phone,campaign,adset,ad,adId,date,message<br />
+                Gasto: campaign,ad,adId,spend,dailyBudget,date
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Reglas de decisión</h2>
+                  <p>Usadas para sugerir subir, bajar o pausar.</p>
+                </div>
+              </div>
+              <form class="rules-form" id="rulesForm">
+                <label>
+                  Costo por venta ideal
+                  <input name="targetCpa" inputmode="decimal" />
+                </label>
+                <label>
+                  ROAS mínimo
+                  <input name="minRoas" inputmode="decimal" />
+                </label>
+                <label>
+                  Mínimo de leads para decidir
+                  <input name="minLeads" inputmode="numeric" />
+                </label>
+                <button class="primary-button" type="submit">Guardar reglas</button>
+              </form>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script>
+const STORAGE_KEY = "ventas_ads_state_v1";
+const AUTH_STORAGE_KEY = "ventas_ads_panel_code_v1";
+const API_BASE = getApiBase();
+let panelCode = localStorage.getItem(AUTH_STORAGE_KEY) || "";
+
+const defaultState = {
+  conversations: [],
+  messages: [],
+  sales: [],
+  leads: [],
+  spend: [],
+  ads: [],
+  rules: {
+    targetCpa: 600,
+    minRoas: 2,
+    minLeads: 8,
+  },
+};
+
+let state = loadState();
+let serverAvailable = false;
+let activeConversationId = "";
+
+const money = new Intl.NumberFormat("es-MX", {
+  style: "currency",
+  currency: "MXN",
+  maximumFractionDigits: 0,
+});
+
+const numberFormat = new Intl.NumberFormat("es-MX", {
+  maximumFractionDigits: 2,
+});
+
+const today = () => new Date().toISOString().slice(0, 10);
+
+function uid(prefix) {
+  return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function loadState() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved) return structuredClone(defaultState);
+    return { ...structuredClone(defaultState), ...JSON.parse(saved) };
+  } catch {
+    return structuredClone(defaultState);
+  }
+}
+
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  document.getElementById("storageStatus").textContent = `Guardado ${new Date().toLocaleTimeString("es-MX", {
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
+}
+
+async function api(path, options = {}) {
+  const headers = {
+    "content-type": "application/json",
+    ...(options.headers || {}),
+  };
+  if (panelCode) {
+    headers.Authorization = `Basic ${btoa(`panel:${panelCode}`)}`;
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers,
+  });
+  const contentType = response.headers.get("content-type") || "";
+  const payload = contentType.includes("application/json")
+    ? await response.json()
+    : { error: await response.text() };
+  if (response.status === 401) {
+    panelCode = "";
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    showAuthGate();
+    throw new Error("Ingresa el código del panel");
+  }
+  if (!response.ok) throw new Error(payload.error || "No se pudo conectar");
+  hideAuthGate();
+  return payload;
+}
+
+function getApiBase() {
+  const configured = document.querySelector('meta[name="bormex-api-base"]')?.content?.trim() || window.BORMEX_API_BASE || "";
+  if (configured) return configured.replace(/\/$/, "");
+  const firstPathPart = window.location.pathname.split("/").filter(Boolean)[0];
+  return firstPathPart === "bormex-crm" ? "/bormex-crm" : "";
+}
+
+function showAuthGate() {
+  if (document.getElementById("authGate")) return;
+  const gate = document.createElement("div");
+  gate.className = "auth-gate";
+  gate.id = "authGate";
+  gate.innerHTML = `
+    <form class="auth-card" id="authForm">
+      <span class="brand-mark">VA</span>
+      <h2>Acceso al panel</h2>
+      <label>
+        Código
+        <input name="code" inputmode="numeric" autocomplete="current-password" required autofocus />
+      </label>
+      <button class="primary-button" type="submit">Entrar</button>
+    </form>
+  `;
+  document.body.appendChild(gate);
+  document.getElementById("authForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    panelCode = event.currentTarget.elements.code.value.trim();
+    localStorage.setItem(AUTH_STORAGE_KEY, panelCode);
+    hideAuthGate();
+    await syncFromServer();
+    render();
+  });
+}
+
+function hideAuthGate() {
+  document.getElementById("authGate")?.remove();
+}
+
+async function syncFromServer() {
+  try {
+    const [config, remoteState] = await Promise.all([api("/api/config"), api("/api/state")]);
+    serverAvailable = true;
+    state.conversations = remoteState.conversations || state.conversations;
+    state.messages = remoteState.messages || state.messages;
+    state.sales = remoteState.sales || state.sales;
+    state.leads = remoteState.leads || state.leads;
+    state.spend = remoteState.spend || state.spend;
+    state.ads = remoteState.ads || state.ads;
+    state.rules = remoteState.rules || state.rules;
+    renderConnectionStatus(config, remoteState);
+    saveState();
+  } catch {
+    serverAvailable = false;
+    renderConnectionStatus(null, null);
+  }
+}
+
+function renderConnectionStatus(config, remoteState) {
+  const dots = document.querySelectorAll(".connection-dot");
+  const whatsappText = document.getElementById("whatsappConnectionText");
+  const adsText = document.getElementById("adsConnectionText");
+  const syncButton = document.getElementById("syncAds");
+
+  dots.forEach((dot) => dot.classList.remove("connected"));
+  if (!serverAvailable) {
+    whatsappText.textContent = "Abre la app con el servidor local para recibir webhooks de WhatsApp Cloud API.";
+    adsText.textContent = "Abre la app con el servidor local para sincronizar anuncios activos desde Meta Ads API.";
+    syncButton.disabled = true;
+    return;
+  }
+
+  syncButton.disabled = !config.metaAdsConfigured;
+  if (config.whatsappWebhookConfigured) {
+    dots[0].classList.add("connected");
+    const phoneStatus = config.whatsappPhoneConfigured ? "Número real configurado." : "Falta WHATSAPP_PHONE_NUMBER_ID para responder desde el CRM.";
+    whatsappText.textContent = `Webhook listo. ${phoneStatus} Último mensaje recibido: ${remoteState.lastWebhookAt || "todavía ninguno"}.`;
+  } else {
+    whatsappText.textContent = "Falta WHATSAPP_VERIFY_TOKEN en .env para verificar el webhook de Meta.";
+  }
+
+  if (config.metaAdsConfigured) {
+    dots[1].classList.add("connected");
+    adsText.textContent = `Meta Ads configurado. Última sincronización: ${remoteState.lastAdsSync || "todavía ninguna"}. Auto-sync cada ${config.adsSyncIntervalMinutes || 15} minutos.`;
+  } else {
+    adsText.textContent = "Faltan META_ACCESS_TOKEN y META_AD_ACCOUNT_ID en .env para leer anuncios activos.";
+  }
+}
+
+async function syncAdsFromMeta() {
+  const button = document.getElementById("syncAds");
+  button.disabled = true;
+  button.textContent = "Sincronizando...";
+  try {
+    const remoteState = await api("/api/sync/ads", { method: "POST", body: "{}" });
+    state.spend = remoteState.spend || [];
+    state.ads = remoteState.ads || [];
+    saveState();
+    render();
+    await syncFromServer();
+    toast("Anuncios activos sincronizados");
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.textContent = "Sincronizar anuncios activos";
+    button.disabled = false;
+  }
+}
+
+function normalizePhone(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 10) return `52${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `52${digits.slice(1)}`;
+  if (digits.length >= 12 && digits.startsWith("521")) return `52${digits.slice(3)}`;
+  return digits;
+}
+
+function parseMoney(value) {
+  const cleaned = String(value || "").replace(/[$,\s]/g, "");
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getSaleProducts(sale) {
+  if (Array.isArray(sale.products) && sale.products.length) return sale.products;
+  if (sale.product) return [sale.product];
+  return [];
+}
+
+function adKey(record) {
+  return record.adId?.trim() || `${record.campaign || "Sin campaña"}::${record.ad || "Sin anuncio"}`;
+}
+
+function findLeadForSale(sale) {
+  const phone = normalizePhone(sale.phone);
+  return [...state.leads]
+    .filter((lead) => normalizePhone(lead.phone) === phone)
+    .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+}
+
+function getPerformance() {
+  const map = new Map();
+
+  for (const ad of state.ads || []) {
+    const key = ad.id || `${ad.campaign || "Sin campaña"}::${ad.name || "Sin anuncio"}`;
+    map.set(key, {
+      key,
+      campaign: ad.campaign || "Sin campaña",
+      ad: ad.name || "Sin anuncio",
+      adId: ad.id || "",
+      leads: 0,
+      sales: 0,
+      revenue: 0,
+      spend: Number(ad.spend || 0),
+      dailyBudget: Number(ad.dailyBudget || 0),
+    });
+  }
+
+  for (const lead of state.leads) {
+    const key = adKey(lead);
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        campaign: lead.campaign || "Sin campaña",
+        ad: lead.ad || "Sin anuncio",
+        adId: lead.adId || "",
+        leads: 0,
+        sales: 0,
+        revenue: 0,
+        spend: 0,
+        dailyBudget: 0,
+      });
+    }
+    map.get(key).leads += 1;
+  }
+
+  for (const spend of state.spend) {
+    const key = adKey(spend);
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        campaign: spend.campaign || "Sin campaña",
+        ad: spend.ad || "Sin anuncio",
+        adId: spend.adId || "",
+        leads: 0,
+        sales: 0,
+        revenue: 0,
+        spend: 0,
+        dailyBudget: 0,
+      });
+    }
+    const row = map.get(key);
+    row.spend += Number(spend.spend || 0);
+    row.dailyBudget = Math.max(row.dailyBudget, Number(spend.dailyBudget || 0));
+  }
+
+  for (const sale of state.sales) {
+    const lead = findLeadForSale(sale);
+    if (!lead) continue;
+    const key = adKey(lead);
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        campaign: lead.campaign || "Sin campaña",
+        ad: lead.ad || "Sin anuncio",
+        adId: lead.adId || "",
+        leads: 0,
+        sales: 0,
+        revenue: 0,
+        spend: 0,
+        dailyBudget: 0,
+      });
+    }
+    const row = map.get(key);
+    row.sales += 1;
+    row.revenue += Number(sale.amount || 0);
+  }
+
+  return [...map.values()].map((row) => {
+    const cpa = row.sales > 0 ? row.spend / row.sales : 0;
+    const roas = row.spend > 0 ? row.revenue / row.spend : 0;
+    return {
+      ...row,
+      cpa,
+      roas,
+      recommendation: recommend(row, cpa, roas),
+    };
+  });
+}
+
+function recommend(row, cpa, roas) {
+  const rules = state.rules;
+  if (row.leads < Number(rules.minLeads)) return "hold";
+  if (row.sales === 0 && row.spend > Number(rules.targetCpa)) return "pause";
+  if (row.sales > 0 && (cpa > Number(rules.targetCpa) * 1.35 || roas < Number(rules.minRoas) * 0.65)) return "reduce";
+  if (row.sales > 0 && cpa <= Number(rules.targetCpa) && roas >= Number(rules.minRoas)) return "scale";
+  return "hold";
+}
+
+function recommendationLabel(value) {
+  return {
+    scale: "Subir",
+    hold: "Mantener",
+    reduce: "Bajar",
+    pause: "Pausar",
+  }[value];
+}
+
+function render() {
+  renderMetrics();
+  renderCrm();
+  renderPerformance();
+  renderRecentSales();
+  renderSalesTable();
+  renderLeadsTable();
+  renderSpendTable();
+  fillRules();
+}
+
+function renderMetrics() {
+  const performance = getPerformance();
+  const spend = performance.reduce((sum, item) => sum + item.spend, 0);
+  const revenue = state.sales.reduce((sum, sale) => sum + Number(sale.amount || 0), 0);
+  const cpa = state.sales.length ? spend / state.sales.length : 0;
+  const roas = spend ? revenue / spend : 0;
+  document.getElementById("metricSpend").textContent = money.format(spend);
+  document.getElementById("metricRevenue").textContent = money.format(revenue);
+  document.getElementById("metricRoas").textContent = `${numberFormat.format(roas)}x`;
+  document.getElementById("metricCpa").textContent = money.format(cpa);
+}
+
+function renderPerformance() {
+  const tbody = document.getElementById("adsPerformanceTable");
+  const filter = document.getElementById("statusFilter").value;
+  const rows = getPerformance()
+    .filter((row) => filter === "all" || row.recommendation === filter)
+    .sort((a, b) => b.revenue - a.revenue || b.spend - a.spend);
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="9" class="empty">Todavía no hay datos suficientes.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows
+    .map(
+      (row) => `
+        <tr>
+          <td>${escapeHtml(row.ad)}</td>
+          <td>${escapeHtml(row.campaign)}</td>
+          <td>${money.format(row.spend)}</td>
+          <td>${row.leads}</td>
+          <td>${row.sales}</td>
+          <td>${money.format(row.revenue)}</td>
+          <td>${row.sales ? money.format(row.cpa) : "Sin ventas"}</td>
+          <td>${row.spend ? `${numberFormat.format(row.roas)}x` : "0.00x"}</td>
+          <td><span class="badge ${row.recommendation}">${recommendationLabel(row.recommendation)}</span></td>
+        </tr>
+      `,
+    )
+    .join("");
+}
+
+function renderRecentSales() {
+  const container = document.getElementById("recentSales");
+  const rows = [...state.sales].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
+  if (!rows.length) {
+    container.innerHTML = `<div class="empty">Aquí aparecerán las ventas recientes.</div>`;
+    return;
+  }
+
+  container.innerHTML = rows
+    .map((sale) => {
+      const lead = findLeadForSale(sale);
+      return `
+        <div class="activity-item">
+          <strong>${escapeHtml(getSaleProducts(sale).join(", "))} · ${money.format(Number(sale.amount || 0))}</strong>
+          <span>${escapeHtml(sale.phone)} · ${lead ? escapeHtml(lead.ad) : "Sin atribución"}</span>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderSalesTable() {
+  const tbody = document.getElementById("salesTable");
+  if (!state.sales.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">Registra la primera venta para empezar.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = [...state.sales]
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .map((sale) => {
+      const lead = findLeadForSale(sale);
+      return `
+        <tr>
+          <td>${escapeHtml(sale.date)}</td>
+          <td>${escapeHtml(sale.phone)}</td>
+          <td>${escapeHtml(getSaleProducts(sale).join(", "))}</td>
+          <td>${money.format(Number(sale.amount || 0))}</td>
+          <td>${lead ? `${escapeHtml(lead.ad)} / ${escapeHtml(lead.campaign)}` : "Sin coincidencia"}</td>
+          <td><button class="danger-button" data-delete="sales" data-id="${sale.id}" type="button">Eliminar</button></td>
+        </tr>
+      `;
+    })
+    .join("");
+}
+
+function renderLeadsTable() {
+  const tbody = document.getElementById("leadsTable");
+  if (!state.leads.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">Los leads aparecerán aquí cuando conectemos WhatsApp Cloud API.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = [...state.leads]
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .map(
+      (lead) => `
+        <tr>
+          <td>${escapeHtml(lead.date)}</td>
+          <td>${escapeHtml(lead.phone)}</td>
+          <td>${escapeHtml(lead.campaign)}</td>
+          <td>${escapeHtml(lead.ad)}</td>
+          <td>${escapeHtml(lead.adId || "")}</td>
+          <td><button class="danger-button" data-delete="leads" data-id="${lead.id}" type="button">Eliminar</button></td>
+        </tr>
+      `,
+    )
+    .join("");
+}
+
+function renderSpendTable() {
+  const tbody = document.getElementById("spendTable");
+  if (!state.spend.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">Los anuncios activos aparecerán aquí cuando conectemos Meta Ads API.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = [...state.spend]
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .map(
+      (spend) => `
+        <tr>
+          <td>${escapeHtml(spend.date)}</td>
+          <td>${escapeHtml(spend.campaign)}</td>
+          <td>${escapeHtml(spend.ad)}</td>
+          <td>${money.format(Number(spend.spend || 0))}</td>
+          <td>${spend.dailyBudget ? money.format(Number(spend.dailyBudget || 0)) : ""}</td>
+          <td><button class="danger-button" data-delete="spend" data-id="${spend.id}" type="button">Eliminar</button></td>
+        </tr>
+      `,
+    )
+    .join("");
+}
+
+function fillRules() {
+  const form = document.getElementById("rulesForm");
+  form.elements.targetCpa.value = state.rules.targetCpa;
+  form.elements.minRoas.value = state.rules.minRoas;
+  form.elements.minLeads.value = state.rules.minLeads;
+}
+
+function setView(view) {
+  document.querySelectorAll(".nav-item").forEach((button) => {
+    button.classList.toggle("active", button.dataset.view === view);
+  });
+  document.querySelectorAll(".view").forEach((section) => {
+    section.classList.toggle("active", section.id === `${view}View`);
+  });
+  document.getElementById("viewTitle").textContent = {
+    dashboard: "Panel",
+    crm: "CRM",
+    sales: "Ventas",
+    leads: "Leads",
+    ads: "Anuncios",
+    settings: "Datos",
+  }[view];
+}
+
+function getChannelLabel(channel) {
+  return {
+    whatsapp: "WhatsApp",
+    messenger: "Messenger",
+    instagram: "Instagram",
+  }[channel] || channel;
+}
+
+function getConversationRows() {
+  const filter = document.getElementById("crmChannelFilter")?.value || "all";
+  return [...(state.conversations || [])]
+    .filter((conversation) => filter === "all" || conversation.channel === filter)
+    .sort((a, b) => new Date(b.lastAt || 0) - new Date(a.lastAt || 0));
+}
+
+function renderCrm() {
+  const list = document.getElementById("conversationList");
+  const thread = document.getElementById("messageThread");
+  const header = document.getElementById("threadHeader");
+  if (!list || !thread || !header) return;
+
+  const conversations = getConversationRows();
+  if (!activeConversationId && conversations.length) activeConversationId = conversations[0].id;
+  if (activeConversationId && !conversations.some((item) => item.id === activeConversationId)) {
+    activeConversationId = conversations[0]?.id || "";
+  }
+
+  if (!conversations.length) {
+    list.innerHTML = `<div class="empty">Cuando entren mensajes por webhook aparecerán aquí.</div>`;
+  } else {
+    list.innerHTML = conversations
+      .map(
+        (conversation) => `
+          <button class="conversation-item ${conversation.id === activeConversationId ? "active" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button">
+            <span class="channel-pill ${escapeHtml(conversation.channel)}">${getChannelLabel(conversation.channel)}</span>
+            <strong>${escapeHtml(conversation.name || conversation.phone || conversation.contactId)}</strong>
+            <small>${escapeHtml(conversation.lastMessage || "")}</small>
+          </button>
+        `,
+      )
+      .join("");
+  }
+
+  const active = conversations.find((conversation) => conversation.id === activeConversationId);
+  if (!active) {
+    header.innerHTML = `
+      <div>
+        <h2>Selecciona una conversación</h2>
+        <p>Los mensajes nuevos aparecerán aquí cuando llegue el webhook.</p>
+      </div>
+    `;
+    thread.innerHTML = `<div class="empty">Sin conversación seleccionada.</div>`;
+    document.getElementById("replyForm").classList.add("disabled");
+    return;
+  }
+
+  document.getElementById("replyForm").classList.remove("disabled");
+  header.innerHTML = `
+    <div>
+      <h2>${escapeHtml(active.name || active.phone || active.contactId)}</h2>
+      <p>${getChannelLabel(active.channel)}${active.phone ? ` · ${escapeHtml(active.phone)}` : ""}</p>
+    </div>
+  `;
+
+  const messages = [...(state.messages || [])]
+    .filter((message) => message.conversationId === activeConversationId)
+    .sort((a, b) => new Date(a.at || 0) - new Date(b.at || 0));
+
+  thread.innerHTML = messages.length
+    ? messages
+        .map(
+          (message) => `
+            <div class="message-bubble ${message.direction === "outbound" ? "outbound" : "inbound"}">
+              <p>${escapeHtml(message.text || "")}</p>
+              <span>${new Date(message.at || Date.now()).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" })}</span>
+            </div>
+          `,
+        )
+        .join("")
+    : `<div class="empty">Todavía no hay mensajes guardados.</div>`;
+  thread.scrollTop = thread.scrollHeight;
+}
+
+async function handleSaleSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = Object.fromEntries(new FormData(form));
+  const products = new FormData(form).getAll("products");
+  if (!products.length) {
+    toast("Selecciona al menos un producto");
+    return;
+  }
+  const sale = {
+    id: uid("sale"),
+    phone: normalizePhone(data.phone),
+    products,
+    product: products.join(", "),
+    amount: parseMoney(data.amount),
+    date: data.date || today(),
+  };
+
+  try {
+    if (serverAvailable) {
+      const remoteState = await api("/api/sales", { method: "POST", body: JSON.stringify(sale) });
+      applyRemoteState(remoteState);
+    } else {
+      state.sales.push(sale);
+      saveState();
+    }
+    form.reset();
+    form.elements.date.value = today();
+    render();
+    toast("Venta registrada");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function applyRemoteState(remoteState) {
+  state.conversations = remoteState.conversations || state.conversations;
+  state.messages = remoteState.messages || state.messages;
+  state.sales = remoteState.sales || state.sales;
+  state.leads = remoteState.leads || state.leads;
+  state.spend = remoteState.spend || state.spend;
+  state.ads = remoteState.ads || state.ads;
+  state.rules = remoteState.rules || state.rules;
+  saveState();
+}
+
+function persistAndRender(message) {
+  saveState();
+  render();
+  toast(message);
+}
+
+function toast(message) {
+  const element = document.getElementById("toast");
+  element.textContent = message;
+  element.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => element.classList.remove("show"), 2200);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function toCsv(rows, columns) {
+  const header = columns.join(",");
+  const body = rows
+    .map((row) =>
+      columns
+        .map((column) => {
+          const value = row[column] ?? "";
+          return `"${String(value).replaceAll('"', '""')}"`;
+        })
+        .join(","),
+    )
+    .join("\n");
+  return `${header}\n${body}`;
+}
+
+function download(filename, text, type = "text/plain") {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let current = "";
+  let row = [];
+  let quoted = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+    if (char === '"' && quoted && next === '"') {
+      current += '"';
+      i += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      row.push(current);
+      current = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") i += 1;
+      row.push(current);
+      if (row.some((cell) => cell.trim() !== "")) rows.push(row);
+      current = "";
+      row = [];
+    } else {
+      current += char;
+    }
+  }
+  row.push(current);
+  if (row.some((cell) => cell.trim() !== "")) rows.push(row);
+
+  const [headers = [], ...records] = rows;
+  return records.map((record) =>
+    headers.reduce((item, header, index) => {
+      item[header.trim()] = record[index] ?? "";
+      return item;
+    }, {}),
+  );
+}
+
+function importCsv() {
+  const input = document.getElementById("csvInput");
+  const type = document.getElementById("importType").value;
+  const file = input.files[0];
+  if (!file) {
+    toast("Selecciona un CSV primero");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const rows = parseCsv(String(reader.result || ""));
+    const normalized = rows.map((row) => normalizeImportedRow(type, row));
+    try {
+      if (serverAvailable) {
+        const remoteState = await api("/api/import", {
+          method: "POST",
+          body: JSON.stringify({ type, rows: normalized }),
+        });
+        applyRemoteState(remoteState);
+      } else {
+        state[type].push(...normalized);
+        saveState();
+      }
+      input.value = "";
+      render();
+      toast(`Importados ${normalized.length} registros`);
+    } catch (error) {
+      toast(error.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function normalizeImportedRow(type, row) {
+  if (type === "sales") {
+    return {
+      id: uid("sale"),
+      phone: normalizePhone(row.phone),
+      products: String(row.product || "")
+        .split(/[|,]/)
+        .map((product) => product.trim())
+        .filter(Boolean),
+      product: row.product || "",
+      amount: parseMoney(row.amount),
+      date: row.date || today(),
+    };
+  }
+  if (type === "leads") {
+    return {
+      id: uid("lead"),
+      phone: normalizePhone(row.phone),
+      campaign: row.campaign || "",
+      adset: row.adset || "",
+      ad: row.ad || "",
+      adId: row.adId || "",
+      date: row.date || today(),
+      message: row.message || "",
+    };
+  }
+  return {
+    id: uid("spend"),
+    campaign: row.campaign || "",
+    ad: row.ad || "",
+    adId: row.adId || "",
+    spend: parseMoney(row.spend),
+    dailyBudget: parseMoney(row.dailyBudget),
+    date: row.date || today(),
+  };
+}
+
+function seedDemoData() {
+  const demoPhone = "529991234567";
+  state.leads.push({
+    id: uid("lead"),
+    phone: demoPhone,
+    campaign: "Mensajes Mayo",
+    adset: "Lookalike compradores",
+    ad: "Video testimonio 01",
+    adId: "demo_ad_01",
+    date: today(),
+    message: "Hola, quiero informes",
+  });
+  state.sales.push({
+    id: uid("sale"),
+    phone: demoPhone,
+    products: ["Imán", "Llavero"],
+    product: "Imán, Llavero",
+    amount: 2500,
+    date: today(),
+  });
+  state.spend.push({
+    id: uid("spend"),
+    campaign: "Mensajes Mayo",
+    ad: "Video testimonio 01",
+    adId: "demo_ad_01",
+    spend: 430,
+    dailyBudget: 300,
+    date: today(),
+  });
+  persistAndRender("Datos demo agregados");
+}
+
+document.querySelectorAll(".nav-item").forEach((button) => {
+  button.addEventListener("click", () => setView(button.dataset.view));
+});
+
+document.querySelectorAll("[data-open-sale]").forEach((button) => {
+  button.addEventListener("click", () => setView("sales"));
+});
+
+document.getElementById("saleForm").addEventListener("submit", handleSaleSubmit);
+document.getElementById("statusFilter").addEventListener("change", renderPerformance);
+document.getElementById("syncAds").addEventListener("click", syncAdsFromMeta);
+
+document.addEventListener("click", (event) => {
+  const conversationButton = event.target.closest("[data-conversation-id]");
+  if (conversationButton) {
+    activeConversationId = conversationButton.dataset.conversationId;
+    renderCrm();
+    return;
+  }
+
+  const button = event.target.closest("[data-delete]");
+  if (!button) return;
+  const collection = button.dataset.delete;
+  deleteRecord(collection, button.dataset.id);
+});
+
+async function deleteRecord(collection, id) {
+  try {
+    if (serverAvailable) {
+      const remoteState = await api(`/api/records/${collection}/${encodeURIComponent(id)}`, { method: "DELETE" });
+      applyRemoteState(remoteState);
+    } else {
+      state[collection] = state[collection].filter((item) => item.id !== id);
+      saveState();
+    }
+    render();
+    toast("Registro eliminado");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+document.getElementById("exportJson").addEventListener("click", () => {
+  download(`ventas-ads-${today()}.json`, JSON.stringify(state, null, 2), "application/json");
+});
+
+document.getElementById("exportSalesCsv").addEventListener("click", () => {
+  const rows = state.sales.map((sale) => ({ ...sale, product: getSaleProducts(sale).join("|") }));
+  download(`ventas-${today()}.csv`, toCsv(rows, ["phone", "product", "amount", "date"]), "text/csv");
+});
+
+document.getElementById("exportLeadsCsv").addEventListener("click", () => {
+  download(`leads-${today()}.csv`, toCsv(state.leads, ["phone", "campaign", "adset", "ad", "adId", "date", "message"]), "text/csv");
+});
+
+document.getElementById("exportSpendCsv").addEventListener("click", () => {
+  download(`gasto-${today()}.csv`, toCsv(state.spend, ["campaign", "ad", "adId", "spend", "dailyBudget", "date"]), "text/csv");
+});
+
+document.getElementById("importCsv").addEventListener("click", importCsv);
+document.getElementById("crmChannelFilter").addEventListener("change", () => {
+  activeConversationId = "";
+  renderCrm();
+});
+
+document.getElementById("replyForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const conversation = (state.conversations || []).find((item) => item.id === activeConversationId);
+  const text = event.currentTarget.elements.text.value.trim();
+  if (!conversation || !text) return;
+  try {
+    const remoteState = await api("/api/messages", {
+      method: "POST",
+      body: JSON.stringify({
+        channel: conversation.channel,
+        conversationId: conversation.id,
+        to: conversation.phone || conversation.contactId,
+        phone: conversation.phone,
+        name: conversation.name,
+        text,
+      }),
+    });
+    event.currentTarget.reset();
+    applyRemoteState(remoteState);
+    render();
+    toast("Mensaje enviado");
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
+document.getElementById("rulesForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.currentTarget));
+  const rules = {
+    targetCpa: parseMoney(data.targetCpa),
+    minRoas: Number(data.minRoas || 0),
+    minLeads: Number(data.minLeads || 0),
+  };
+  try {
+    if (serverAvailable) {
+      const remoteState = await api("/api/rules", { method: "POST", body: JSON.stringify(rules) });
+      applyRemoteState(remoteState);
+    } else {
+      state.rules = rules;
+      saveState();
+    }
+    render();
+    toast("Reglas guardadas");
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
+document.getElementById("fillSaleExample").addEventListener("click", () => {
+  const form = document.getElementById("saleForm");
+  form.elements.phone.value = "+52 999 123 4567";
+  form.querySelectorAll('input[name="products"]').forEach((input) => {
+    input.checked = ["Imán", "Llavero"].includes(input.value);
+  });
+  form.elements.amount.value = "2500";
+  form.elements.date.value = today();
+});
+
+document.getElementById("clearDemoData").addEventListener("click", () => {
+  if (!confirm("Esto borrara ventas, leads, gastos y reglas guardadas en este navegador. ¿Quieres continuar?")) {
+    return;
+  }
+  state = structuredClone(defaultState);
+  persistAndRender("Datos limpiados");
+});
+
+document.querySelectorAll('input[type="date"]').forEach((input) => {
+  input.value = today();
+});
+
+render();
+saveState();
+
+syncFromServer().then(render);
+setInterval(() => {
+  syncFromServer().then(render);
+}, 30000);
+
+</script>
+  </body>
+</html>

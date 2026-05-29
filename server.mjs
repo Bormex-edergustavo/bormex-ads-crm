@@ -1,0 +1,688 @@
+import http from "node:http";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { existsSync, createReadStream, readFileSync } from "node:fs";
+import { extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = fileURLToPath(new URL(".", import.meta.url));
+const dataDir = join(root, "data");
+const dbPath = join(dataDir, "db.json");
+const envPath = join(root, ".env");
+
+loadEnvFile();
+
+const PORT = Number(process.env.PORT || 4173);
+const HOST = process.env.HOST || "127.0.0.1";
+const DEFAULT_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v24.0";
+const ADS_SYNC_INTERVAL_MS = Number(process.env.ADS_SYNC_INTERVAL_MINUTES || 15) * 60 * 1000;
+
+const mime = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+};
+
+const defaultDb = {
+  conversations: [],
+  messages: [],
+  sales: [],
+  leads: [],
+  spend: [],
+  ads: [],
+  rules: {
+    targetCpa: 600,
+    minRoas: 2,
+    minLeads: 8,
+  },
+  lastAdsSync: null,
+  lastWebhookAt: null,
+};
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+
+    if (!isPublicPath(url.pathname) && !isAuthorized(req)) {
+      return unauthorized(res);
+    }
+
+    if (url.pathname === "/api/config" && req.method === "POST") {
+      const body = await readJson(req);
+      await saveRuntimeConfig(body);
+      return json(res, {
+        metaAdsConfigured: Boolean(process.env.META_ACCESS_TOKEN && process.env.META_AD_ACCOUNT_ID),
+        whatsappWebhookConfigured: Boolean(process.env.WHATSAPP_VERIFY_TOKEN),
+        whatsappPhoneConfigured: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID),
+        adAccountId: maskValue(process.env.META_AD_ACCOUNT_ID),
+        webhookPath: "/webhooks/whatsapp",
+        graphVersion: graphVersion(),
+        panelAuthConfigured: Boolean(process.env.PANEL_PASSWORD),
+        adsSyncIntervalMinutes: Math.round(ADS_SYNC_INTERVAL_MS / 60000),
+      });
+    }
+
+    if (url.pathname === "/api/config") {
+      return json(res, {
+        metaAdsConfigured: Boolean(process.env.META_ACCESS_TOKEN && process.env.META_AD_ACCOUNT_ID),
+        whatsappWebhookConfigured: Boolean(process.env.WHATSAPP_VERIFY_TOKEN),
+        whatsappPhoneConfigured: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID),
+        adAccountId: maskValue(process.env.META_AD_ACCOUNT_ID),
+        webhookPath: "/webhooks/whatsapp",
+        graphVersion: graphVersion(),
+        panelAuthConfigured: Boolean(process.env.PANEL_PASSWORD),
+        adsSyncIntervalMinutes: Math.round(ADS_SYNC_INTERVAL_MS / 60000),
+      });
+    }
+
+    if (url.pathname === "/api/state") {
+      return json(res, await readDb());
+    }
+
+    if (url.pathname === "/api/messages" && req.method === "POST") {
+      const body = await readJson(req);
+      const db = await readDb();
+      const message = await sendCrmMessage(body);
+      db.conversations = upsertById(db.conversations, [message.conversation]);
+      db.messages = upsertById(db.messages, [message.record]);
+      await writeDb(db);
+      return json(res, db);
+    }
+
+    if (url.pathname === "/api/sync/ads" && req.method === "POST") {
+      const db = await readDb();
+      const payload = await syncMetaAds();
+      db.ads = payload.ads;
+      db.spend = payload.spend;
+      db.lastAdsSync = new Date().toISOString();
+      await writeDb(db);
+      return json(res, db);
+    }
+
+    if (url.pathname === "/api/sales" && req.method === "POST") {
+      const body = await readJson(req);
+      const db = await readDb();
+      const sale = normalizeSale(body);
+      db.sales = upsertById(db.sales, [sale]);
+      await writeDb(db);
+      return json(res, db);
+    }
+
+    if (url.pathname.startsWith("/api/sales/") && req.method === "DELETE") {
+      const id = decodeURIComponent(url.pathname.replace("/api/sales/", ""));
+      const db = await readDb();
+      db.sales = db.sales.filter((sale) => sale.id !== id);
+      await writeDb(db);
+      return json(res, db);
+    }
+
+    if (url.pathname === "/api/rules" && req.method === "POST") {
+      const body = await readJson(req);
+      const db = await readDb();
+      db.rules = normalizeRules(body);
+      await writeDb(db);
+      return json(res, db);
+    }
+
+    if (url.pathname === "/api/import" && req.method === "POST") {
+      const body = await readJson(req);
+      const db = await readDb();
+      const rows = Array.isArray(body.rows) ? body.rows : [];
+      if (body.type === "sales") db.sales = upsertById(db.sales, rows.map(normalizeSale));
+      if (body.type === "leads") db.leads = upsertLeads(db.leads, rows.map(normalizeLead));
+      if (body.type === "spend") db.spend = upsertById(db.spend, rows.map(normalizeSpend));
+      await writeDb(db);
+      return json(res, db);
+    }
+
+    if (url.pathname.startsWith("/api/records/") && req.method === "DELETE") {
+      const [, , , collection, rawId] = url.pathname.split("/");
+      if (!["sales", "leads", "spend"].includes(collection)) return text(res, "Not found", 404);
+      const db = await readDb();
+      const id = decodeURIComponent(rawId || "");
+      db[collection] = db[collection].filter((item) => item.id !== id);
+      await writeDb(db);
+      return json(res, db);
+    }
+
+    if (url.pathname === "/webhooks/whatsapp" && req.method === "GET") {
+      return verifyWhatsAppWebhook(url, res);
+    }
+
+    if (url.pathname === "/webhooks/whatsapp" && req.method === "POST") {
+      const body = await readJson(req);
+      const db = await readDb();
+      const payload = extractWhatsAppEvents(body);
+      db.leads = upsertLeads(db.leads, payload.leads);
+      db.conversations = upsertById(db.conversations, payload.conversations);
+      db.messages = upsertById(db.messages, payload.messages);
+      db.lastWebhookAt = new Date().toISOString();
+      await writeDb(db);
+      return json(res, { ok: true, leads: payload.leads.length, messages: payload.messages.length });
+    }
+
+    if (url.pathname === "/webhooks/meta" && req.method === "GET") {
+      return verifyWhatsAppWebhook(url, res);
+    }
+
+    if (url.pathname === "/webhooks/meta" && req.method === "POST") {
+      const body = await readJson(req);
+      const db = await readDb();
+      const payload = extractMetaMessagingEvents(body);
+      db.conversations = upsertById(db.conversations, payload.conversations);
+      db.messages = upsertById(db.messages, payload.messages);
+      db.lastWebhookAt = new Date().toISOString();
+      await writeDb(db);
+      return json(res, { ok: true, messages: payload.messages.length });
+    }
+
+    return serveStatic(url.pathname, res);
+  } catch (error) {
+    console.error(error);
+    return json(res, { error: error.message || "Error interno" }, 500);
+  }
+});
+
+server.listen(PORT, HOST, () => {
+  console.log(`Ventas Ads listo en http://${HOST}:${PORT}`);
+});
+
+setInterval(() => {
+  syncMetaAdsIntoDb().catch((error) => {
+    console.error(`No se pudo sincronizar Meta Ads: ${error.message}`);
+  });
+}, ADS_SYNC_INTERVAL_MS).unref();
+
+setTimeout(() => {
+  syncMetaAdsIntoDb().catch((error) => {
+    console.error(`Sincronización inicial omitida: ${error.message}`);
+  });
+}, 2500).unref();
+
+function loadEnvFile() {
+  if (!existsSync(envPath)) return;
+  const text = readFileSync(envPath, "utf8");
+  for (const line of text.split(/\r?\n/)) {
+    const clean = line.trim();
+    if (!clean || clean.startsWith("#") || !clean.includes("=")) continue;
+    const [key, ...rest] = clean.split("=");
+    if (!process.env[key]) process.env[key] = rest.join("=").trim().replace(/^["']|["']$/g, "");
+  }
+}
+
+async function saveRuntimeConfig(body) {
+  const current = readCurrentEnv();
+  const next = {
+    ...current,
+    PORT: String(PORT),
+    HOST,
+    META_GRAPH_VERSION: String(body.graphVersion || current.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION),
+    META_AD_ACCOUNT_ID: String(body.adAccountId || current.META_AD_ACCOUNT_ID || "").trim(),
+    META_ACCESS_TOKEN: String(body.metaAccessToken || current.META_ACCESS_TOKEN || "").trim(),
+    WHATSAPP_VERIFY_TOKEN: String(body.whatsappVerifyToken || current.WHATSAPP_VERIFY_TOKEN || "").trim(),
+    WHATSAPP_BUSINESS_ACCOUNT_ID: String(body.whatsappBusinessAccountId || current.WHATSAPP_BUSINESS_ACCOUNT_ID || "").trim(),
+    WHATSAPP_PHONE_NUMBER_ID: String(body.whatsappPhoneNumberId || current.WHATSAPP_PHONE_NUMBER_ID || "").trim(),
+    PANEL_USERNAME: String(body.panelUsername || current.PANEL_USERNAME || "eder").trim(),
+    PANEL_PASSWORD: String(body.panelPassword || current.PANEL_PASSWORD || "").trim(),
+  };
+
+  for (const [key, value] of Object.entries(next)) {
+    if (value) process.env[key] = value;
+  }
+
+  const lines = Object.entries(next)
+    .filter(([, value]) => value)
+    .map(([key, value]) => `${key}=${quoteEnv(value)}`);
+  await writeFile(envPath, `${lines.join("\n")}\n`);
+}
+
+function readCurrentEnv() {
+  if (!existsSync(envPath)) return {};
+  const values = {};
+  for (const line of readFileSync(envPath, "utf8").split(/\r?\n/)) {
+    const clean = line.trim();
+    if (!clean || clean.startsWith("#") || !clean.includes("=")) continue;
+    const [key, ...rest] = clean.split("=");
+    values[key] = rest.join("=").trim().replace(/^["']|["']$/g, "");
+  }
+  return values;
+}
+
+function quoteEnv(value) {
+  return String(value).replaceAll("\n", "").replaceAll('"', '\\"');
+}
+
+function maskValue(value) {
+  if (!value) return "";
+  const text = String(value);
+  if (text.length <= 8) return "configurado";
+  return `${text.slice(0, 4)}...${text.slice(-4)}`;
+}
+
+function graphVersion() {
+  return process.env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION;
+}
+
+function isPublicPath(pathname) {
+  return pathname === "/webhooks/whatsapp" || pathname === "/webhooks/meta";
+}
+
+function isAuthorized(req) {
+  if (!process.env.PANEL_PASSWORD) return true;
+  const header = req.headers.authorization || "";
+  if (!header.startsWith("Basic ")) return false;
+  const decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
+  const separator = decoded.indexOf(":");
+  const username = decoded.slice(0, separator);
+  const password = decoded.slice(separator + 1);
+  const expectedUser = process.env.PANEL_USERNAME || "";
+  const userMatches = expectedUser ? username === expectedUser : true;
+  return userMatches && password === process.env.PANEL_PASSWORD;
+}
+
+function unauthorized(res) {
+  res.writeHead(401, {
+    "content-type": "text/plain; charset=utf-8",
+    "www-authenticate": 'Basic realm="Ventas Ads"',
+  });
+  res.end("Autenticación requerida");
+}
+
+async function readDb() {
+  await mkdir(dataDir, { recursive: true });
+  if (!existsSync(dbPath)) {
+    await writeDb(defaultDb);
+    return structuredClone(defaultDb);
+  }
+  return { ...structuredClone(defaultDb), ...JSON.parse(await readFile(dbPath, "utf8")) };
+}
+
+async function writeDb(db) {
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(dbPath, JSON.stringify(db, null, 2));
+}
+
+async function syncMetaAds() {
+  const token = process.env.META_ACCESS_TOKEN;
+  const rawAccountId = process.env.META_AD_ACCOUNT_ID;
+  if (!token || !rawAccountId) {
+    throw new Error("Faltan META_ACCESS_TOKEN y META_AD_ACCOUNT_ID en .env");
+  }
+
+  const accountId = rawAccountId.startsWith("act_") ? rawAccountId : `act_${rawAccountId}`;
+  const today = new Date().toISOString().slice(0, 10);
+  const fields = [
+    "id",
+    "name",
+    "status",
+    "effective_status",
+    "campaign{id,name,effective_status}",
+    "adset{id,name,effective_status,daily_budget,lifetime_budget}",
+    `insights.time_range({'since':'${today}','until':'${today}'}){spend,impressions,clicks,actions,cost_per_action_type}`,
+  ].join(",");
+
+  const url = new URL(`https://graph.facebook.com/${graphVersion()}/${accountId}/ads`);
+  url.searchParams.set("fields", fields);
+  url.searchParams.set("effective_status", JSON.stringify(["ACTIVE"]));
+  url.searchParams.set("limit", "100");
+  url.searchParams.set("access_token", token);
+
+  const ads = await fetchAllPages(url);
+  const normalizedAds = ads.map(normalizeMetaAd);
+  const spend = normalizedAds.map((ad) => ({
+    id: `meta_spend_${ad.id}_${today}`,
+    source: "meta",
+    campaign: ad.campaign,
+    adset: ad.adset,
+    ad: ad.name,
+    adId: ad.id,
+    spend: ad.spend,
+    dailyBudget: ad.dailyBudget,
+    date: today,
+  }));
+
+  return { ads: normalizedAds, spend };
+}
+
+async function syncMetaAdsIntoDb() {
+  if (!process.env.META_ACCESS_TOKEN || !process.env.META_AD_ACCOUNT_ID) return null;
+  const db = await readDb();
+  const payload = await syncMetaAds();
+  db.ads = payload.ads;
+  db.spend = payload.spend;
+  db.lastAdsSync = new Date().toISOString();
+  await writeDb(db);
+  return db;
+}
+
+async function fetchAllPages(firstUrl) {
+  const rows = [];
+  let next = firstUrl.toString();
+  while (next) {
+    const response = await fetch(next);
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error?.message || `Meta API respondió ${response.status}`);
+    }
+    rows.push(...(payload.data || []));
+    next = payload.paging?.next || "";
+  }
+  return rows;
+}
+
+function normalizeMetaAd(ad) {
+  const insights = ad.insights?.data?.[0] || {};
+  const actions = insights.actions || [];
+  const messageAction = actions.find((item) =>
+    String(item.action_type || "").includes("messaging") ||
+    String(item.action_type || "").includes("onsite_conversion.messaging"),
+  );
+  return {
+    id: ad.id,
+    name: ad.name || "Sin nombre",
+    status: ad.status || "",
+    effectiveStatus: ad.effective_status || "",
+    campaign: ad.campaign?.name || "Sin campaña",
+    campaignId: ad.campaign?.id || "",
+    adset: ad.adset?.name || "Sin conjunto",
+    adsetId: ad.adset?.id || "",
+    dailyBudget: centsToMoney(ad.adset?.daily_budget),
+    spend: Number(insights.spend || 0),
+    impressions: Number(insights.impressions || 0),
+    clicks: Number(insights.clicks || 0),
+    messages: Number(messageAction?.value || 0),
+  };
+}
+
+function centsToMoney(value) {
+  const amount = Number(value || 0);
+  return amount ? amount / 100 : 0;
+}
+
+function verifyWhatsAppWebhook(url, res) {
+  const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
+  if (!verifyToken) return text(res, "Webhook sin configurar", 500);
+  const mode = url.searchParams.get("hub.mode");
+  const token = url.searchParams.get("hub.verify_token");
+  const challenge = url.searchParams.get("hub.challenge");
+  if (mode === "subscribe" && token === verifyToken) return text(res, challenge || "");
+  return text(res, "Forbidden", 403);
+}
+
+async function sendCrmMessage(body) {
+  const channel = String(body.channel || "").trim();
+  const conversationId = String(body.conversationId || "").trim();
+  const to = normalizePhone(body.to || body.phone || "");
+  const textBody = String(body.text || "").trim();
+  if (!channel || !conversationId || !to || !textBody) {
+    throw new Error("Faltan datos para enviar el mensaje");
+  }
+
+  if (channel === "whatsapp") {
+    await sendWhatsAppText(to, textBody);
+  } else {
+    throw new Error(`El envio por ${channel} queda pendiente de configurar con Meta`);
+  }
+
+  const now = new Date().toISOString();
+  return {
+    conversation: {
+      id: conversationId,
+      channel,
+      contactId: to,
+      phone: to,
+      name: String(body.name || to),
+      lastMessage: textBody,
+      lastAt: now,
+      unread: 0,
+    },
+    record: {
+      id: `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      conversationId,
+      channel,
+      direction: "outbound",
+      from: process.env.WHATSAPP_PHONE_NUMBER_ID || "crm",
+      to,
+      text: textBody,
+      at: now,
+      status: "sent",
+    },
+  };
+}
+
+async function sendWhatsAppText(to, textBody) {
+  const token = process.env.META_ACCESS_TOKEN;
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  if (!token || !phoneNumberId) {
+    throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o META_ACCESS_TOKEN para enviar WhatsApp");
+  }
+  const response = await fetch(`https://graph.facebook.com/${graphVersion()}/${phoneNumberId}/messages`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: "text",
+      text: { preview_url: false, body: textBody },
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error?.message || "Meta no acepto el mensaje de WhatsApp");
+}
+
+function extractWhatsAppEvents(payload) {
+  const leads = [];
+  const conversations = [];
+  const messages = [];
+  const entries = payload.entry || [];
+  for (const entry of entries) {
+    for (const change of entry.changes || []) {
+      const value = change.value || {};
+      const contacts = new Map((value.contacts || []).map((contact) => [contact.wa_id, contact]));
+      for (const message of value.messages || []) {
+        const phone = normalizePhone(message.from || "");
+        const contact = contacts.get(message.from) || {};
+        const textBody = extractMessageText(message);
+        const at = timestampToIso(message.timestamp);
+        const conversationId = `whatsapp_${phone}`;
+        conversations.push({
+          id: conversationId,
+          channel: "whatsapp",
+          contactId: phone,
+          phone,
+          name: contact.profile?.name || phone,
+          lastMessage: textBody,
+          lastAt: at,
+          unread: 1,
+        });
+        messages.push({
+          id: message.id || `wa_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+          conversationId,
+          channel: "whatsapp",
+          direction: "inbound",
+          from: phone,
+          to: value.metadata?.display_phone_number || "",
+          text: textBody,
+          at,
+          status: "received",
+        });
+
+        const referral = message.referral || message.context?.referral || {};
+        if (!referral.source_id && !referral.ctwa_clid) continue;
+        leads.push({
+          id: `wa_${message.id || Date.now()}`,
+          source: "whatsapp_cloud",
+          phone,
+          campaign: referral.headline || "Click-to-WhatsApp",
+          adset: "",
+          ad: referral.body || referral.source_url || referral.source_id || "Anuncio WhatsApp",
+          adId: referral.source_id || "",
+          ctwaClid: referral.ctwa_clid || "",
+          date: timestampToDate(message.timestamp),
+          message: textBody,
+        });
+      }
+    }
+  }
+  return { leads, conversations, messages };
+}
+
+function extractMetaMessagingEvents(payload) {
+  const channel = payload.object === "instagram" ? "instagram" : "messenger";
+  const conversations = [];
+  const messages = [];
+  for (const entry of payload.entry || []) {
+    for (const event of entry.messaging || []) {
+      const sender = String(event.sender?.id || "");
+      const recipient = String(event.recipient?.id || "");
+      if (!sender || !event.message) continue;
+      const conversationId = `${channel}_${sender}`;
+      const textBody = event.message.text || "[mensaje sin texto]";
+      const at = event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString();
+      conversations.push({
+        id: conversationId,
+        channel,
+        contactId: sender,
+        phone: "",
+        name: sender,
+        lastMessage: textBody,
+        lastAt: at,
+        unread: 1,
+      });
+      messages.push({
+        id: event.message.mid || `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        conversationId,
+        channel,
+        direction: "inbound",
+        from: sender,
+        to: recipient,
+        text: textBody,
+        at,
+        status: "received",
+      });
+    }
+  }
+  return { conversations, messages };
+}
+
+function extractMessageText(message) {
+  if (message.text?.body) return message.text.body;
+  if (message.button?.text) return message.button.text;
+  if (message.interactive?.button_reply?.title) return message.interactive.button_reply.title;
+  if (message.interactive?.list_reply?.title) return message.interactive.list_reply.title;
+  return `[${message.type || "mensaje"}]`;
+}
+
+function upsertLeads(existing, incoming) {
+  const map = new Map(existing.map((lead) => [lead.id, lead]));
+  for (const lead of incoming) map.set(lead.id, { ...map.get(lead.id), ...lead });
+  return [...map.values()];
+}
+
+function upsertById(existing, incoming) {
+  const map = new Map(existing.map((item) => [item.id, item]));
+  for (const item of incoming) map.set(item.id, { ...map.get(item.id), ...item });
+  return [...map.values()];
+}
+
+function normalizeSale(body) {
+  const products = Array.isArray(body.products)
+    ? body.products.map((product) => String(product).trim()).filter(Boolean)
+    : String(body.product || "")
+        .split(/[|,]/)
+        .map((product) => product.trim())
+        .filter(Boolean);
+  return {
+    id: String(body.id || `sale_${Date.now()}_${Math.random().toString(16).slice(2)}`),
+    phone: normalizePhone(body.phone || ""),
+    products,
+    product: products.join(", "),
+    amount: Number(body.amount || 0),
+    date: String(body.date || new Date().toISOString().slice(0, 10)),
+  };
+}
+
+function normalizeLead(body) {
+  return {
+    id: String(body.id || `lead_${Date.now()}_${Math.random().toString(16).slice(2)}`),
+    source: body.source || "manual_import",
+    phone: normalizePhone(body.phone || ""),
+    campaign: String(body.campaign || ""),
+    adset: String(body.adset || ""),
+    ad: String(body.ad || ""),
+    adId: String(body.adId || ""),
+    ctwaClid: String(body.ctwaClid || ""),
+    date: String(body.date || new Date().toISOString().slice(0, 10)),
+    message: String(body.message || ""),
+  };
+}
+
+function normalizeSpend(body) {
+  return {
+    id: String(body.id || `spend_${Date.now()}_${Math.random().toString(16).slice(2)}`),
+    source: body.source || "manual_import",
+    campaign: String(body.campaign || ""),
+    adset: String(body.adset || ""),
+    ad: String(body.ad || ""),
+    adId: String(body.adId || ""),
+    spend: Number(body.spend || 0),
+    dailyBudget: Number(body.dailyBudget || 0),
+    date: String(body.date || new Date().toISOString().slice(0, 10)),
+  };
+}
+
+function normalizeRules(body) {
+  return {
+    targetCpa: Number(body.targetCpa || 0),
+    minRoas: Number(body.minRoas || 0),
+    minLeads: Number(body.minLeads || 0),
+  };
+}
+
+function normalizePhone(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 10) return `52${digits}`;
+  if (digits.length >= 12 && digits.startsWith("521")) return `52${digits.slice(3)}`;
+  return digits;
+}
+
+function timestampToDate(value) {
+  const numeric = Number(value || 0);
+  if (!numeric) return new Date().toISOString().slice(0, 10);
+  return new Date(numeric * 1000).toISOString().slice(0, 10);
+}
+
+function timestampToIso(value) {
+  const numeric = Number(value || 0);
+  if (!numeric) return new Date().toISOString();
+  return new Date(numeric * 1000).toISOString();
+}
+
+async function readJson(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const text = Buffer.concat(chunks).toString("utf8");
+  return text ? JSON.parse(text) : {};
+}
+
+function serveStatic(pathname, res) {
+  const safePath = pathname === "/" ? "/index.html" : pathname;
+  const filePath = join(root, safePath.replace(/^\/+/, ""));
+  if (!existsSync(filePath)) return text(res, "Not found", 404);
+  res.writeHead(200, { "content-type": mime[extname(filePath)] || "application/octet-stream" });
+  createReadStream(filePath).pipe(res);
+}
+
+function json(res, payload, status = 200) {
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(payload));
+}
+
+function text(res, payload, status = 200) {
+  res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
+  res.end(payload);
+}
