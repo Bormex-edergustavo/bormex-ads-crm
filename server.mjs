@@ -51,9 +51,10 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
       await saveRuntimeConfig(body);
       return json(res, {
-        metaAdsConfigured: Boolean(process.env.META_ACCESS_TOKEN && process.env.META_AD_ACCOUNT_ID),
+        metaAdsConfigured: Boolean(metaAdsAccessToken() && process.env.META_AD_ACCOUNT_ID),
         whatsappWebhookConfigured: Boolean(process.env.WHATSAPP_VERIFY_TOKEN),
         whatsappPhoneConfigured: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID),
+        whatsappApiConfigured: Boolean(whatsappAccessToken() && process.env.WHATSAPP_PHONE_NUMBER_ID),
         adAccountId: maskValue(process.env.META_AD_ACCOUNT_ID),
         webhookPath: "/webhooks/whatsapp",
         graphVersion: graphVersion(),
@@ -64,9 +65,10 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/config") {
       return json(res, {
-        metaAdsConfigured: Boolean(process.env.META_ACCESS_TOKEN && process.env.META_AD_ACCOUNT_ID),
+        metaAdsConfigured: Boolean(metaAdsAccessToken() && process.env.META_AD_ACCOUNT_ID),
         whatsappWebhookConfigured: Boolean(process.env.WHATSAPP_VERIFY_TOKEN),
         whatsappPhoneConfigured: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID),
+        whatsappApiConfigured: Boolean(whatsappAccessToken() && process.env.WHATSAPP_PHONE_NUMBER_ID),
         adAccountId: maskValue(process.env.META_AD_ACCOUNT_ID),
         webhookPath: "/webhooks/whatsapp",
         graphVersion: graphVersion(),
@@ -218,7 +220,9 @@ async function saveRuntimeConfig(body) {
     HOST,
     META_GRAPH_VERSION: String(body.graphVersion || current.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION),
     META_AD_ACCOUNT_ID: String(body.adAccountId || current.META_AD_ACCOUNT_ID || "").trim(),
+    META_ADS_ACCESS_TOKEN: String(body.metaAdsAccessToken || current.META_ADS_ACCESS_TOKEN || "").trim(),
     META_ACCESS_TOKEN: String(body.metaAccessToken || current.META_ACCESS_TOKEN || "").trim(),
+    WHATSAPP_ACCESS_TOKEN: String(body.whatsappAccessToken || current.WHATSAPP_ACCESS_TOKEN || "").trim(),
     WHATSAPP_VERIFY_TOKEN: String(body.whatsappVerifyToken || current.WHATSAPP_VERIFY_TOKEN || "").trim(),
     WHATSAPP_BUSINESS_ACCOUNT_ID: String(body.whatsappBusinessAccountId || current.WHATSAPP_BUSINESS_ACCOUNT_ID || "").trim(),
     WHATSAPP_PHONE_NUMBER_ID: String(body.whatsappPhoneNumberId || current.WHATSAPP_PHONE_NUMBER_ID || "").trim(),
@@ -263,6 +267,14 @@ function graphVersion() {
   return process.env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION;
 }
 
+function metaAdsAccessToken() {
+  return process.env.META_ADS_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN || "";
+}
+
+function whatsappAccessToken() {
+  return process.env.WHATSAPP_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN || "";
+}
+
 function isPublicPath(pathname) {
   return pathname === "/webhooks/whatsapp" || pathname === "/webhooks/meta";
 }
@@ -303,10 +315,10 @@ async function writeDb(db) {
 }
 
 async function syncMetaAds() {
-  const token = process.env.META_ACCESS_TOKEN;
+  const token = metaAdsAccessToken();
   const rawAccountId = process.env.META_AD_ACCOUNT_ID;
   if (!token || !rawAccountId) {
-    throw new Error("Faltan META_ACCESS_TOKEN y META_AD_ACCOUNT_ID en .env");
+    throw new Error("Faltan META_ADS_ACCESS_TOKEN/META_ACCESS_TOKEN y META_AD_ACCOUNT_ID en .env");
   }
 
   const accountId = rawAccountId.startsWith("act_") ? rawAccountId : `act_${rawAccountId}`;
@@ -345,7 +357,7 @@ async function syncMetaAds() {
 }
 
 async function syncMetaAdsIntoDb() {
-  if (!process.env.META_ACCESS_TOKEN || !process.env.META_AD_ACCOUNT_ID) return null;
+  if (!metaAdsAccessToken() || !process.env.META_AD_ACCOUNT_ID) return null;
   const db = await readDb();
   const payload = await syncMetaAds();
   db.ads = payload.ads;
@@ -462,10 +474,10 @@ async function sendCrmMessage(body) {
 }
 
 async function sendWhatsAppText(to, textBody) {
-  const token = process.env.META_ACCESS_TOKEN;
+  const token = whatsappAccessToken();
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
   if (!token || !phoneNumberId) {
-    throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o META_ACCESS_TOKEN para enviar WhatsApp");
+    throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_ACCESS_TOKEN/META_ACCESS_TOKEN para enviar WhatsApp");
   }
   const response = await fetch(`https://graph.facebook.com/${graphVersion()}/${phoneNumberId}/messages`, {
     method: "POST",

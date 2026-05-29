@@ -152,9 +152,10 @@ function normalizePath(pathname: string) {
 
 function configPayload() {
   return {
-    metaAdsConfigured: Boolean(Deno.env.get("META_ACCESS_TOKEN") && Deno.env.get("META_AD_ACCOUNT_ID")),
+    metaAdsConfigured: Boolean(metaAdsAccessToken() && Deno.env.get("META_AD_ACCOUNT_ID")),
     whatsappWebhookConfigured: Boolean(Deno.env.get("WHATSAPP_VERIFY_TOKEN")),
     whatsappPhoneConfigured: Boolean(Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
+    whatsappApiConfigured: Boolean(whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     adAccountId: maskValue(Deno.env.get("META_AD_ACCOUNT_ID") || ""),
     webhookPath: "/webhooks/whatsapp",
     graphVersion: graphVersion(),
@@ -277,9 +278,11 @@ function readFirstSecretKey() {
 }
 
 async function syncMetaAds() {
-  const token = Deno.env.get("META_ACCESS_TOKEN");
+  const token = metaAdsAccessToken();
   const rawAccountId = Deno.env.get("META_AD_ACCOUNT_ID");
-  if (!token || !rawAccountId) throw new Error("Faltan META_ACCESS_TOKEN y META_AD_ACCOUNT_ID");
+  if (!token || !rawAccountId) {
+    throw new Error("Faltan META_ADS_ACCESS_TOKEN/META_ACCESS_TOKEN y META_AD_ACCOUNT_ID");
+  }
 
   const accountId = rawAccountId.startsWith("act_") ? rawAccountId : `act_${rawAccountId}`;
   const today = new Date().toISOString().slice(0, 10);
@@ -401,9 +404,11 @@ async function sendCrmMessage(body: any) {
 }
 
 async function sendWhatsAppText(to: string, textBody: string) {
-  const token = Deno.env.get("META_ACCESS_TOKEN");
+  const token = whatsappAccessToken();
   const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
-  if (!token || !phoneNumberId) throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o META_ACCESS_TOKEN");
+  if (!token || !phoneNumberId) {
+    throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_ACCESS_TOKEN/META_ACCESS_TOKEN");
+  }
   const response = await fetch(`https://graph.facebook.com/${graphVersion()}/${phoneNumberId}/messages`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -639,6 +644,14 @@ function centsToMoney(value: unknown) {
 
 function graphVersion() {
   return Deno.env.get("META_GRAPH_VERSION") || "v25.0";
+}
+
+function metaAdsAccessToken() {
+  return Deno.env.get("META_ADS_ACCESS_TOKEN") || Deno.env.get("META_ACCESS_TOKEN") || "";
+}
+
+function whatsappAccessToken() {
+  return Deno.env.get("WHATSAPP_ACCESS_TOKEN") || Deno.env.get("META_ACCESS_TOKEN") || "";
 }
 
 function maskValue(value: string) {

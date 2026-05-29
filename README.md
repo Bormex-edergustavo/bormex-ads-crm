@@ -31,7 +31,9 @@ Luego abre `http://127.0.0.1:4173`.
 
 ## Variables principales
 
-- `META_ACCESS_TOKEN`: token con permisos de lectura/administracion de anuncios.
+- `META_ADS_ACCESS_TOKEN`: token permanente con permisos de lectura/administracion de anuncios.
+- `WHATSAPP_ACCESS_TOKEN`: token permanente con permisos de WhatsApp Business Platform para mensajes/webhooks.
+- `META_ACCESS_TOKEN`: token heredado opcional; se usa como respaldo si no existen los dos tokens separados.
 - `META_AD_ACCOUNT_ID`: cuenta publicitaria, por ejemplo `act_...`.
 - `WHATSAPP_VERIFY_TOKEN`: token privado para verificar el webhook de Meta.
 - `WHATSAPP_PHONE_NUMBER_ID`: numero de WhatsApp Business Platform.
