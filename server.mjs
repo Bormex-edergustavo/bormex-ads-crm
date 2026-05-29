@@ -428,8 +428,9 @@ async function sendCrmMessage(body) {
     throw new Error("Faltan datos para enviar el mensaje");
   }
 
+  let providerMessageId = `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   if (channel === "whatsapp") {
-    await sendWhatsAppText(to, textBody);
+    providerMessageId = await sendWhatsAppText(to, textBody);
   } else {
     throw new Error(`El envio por ${channel} queda pendiente de configurar con Meta`);
   }
@@ -447,7 +448,7 @@ async function sendCrmMessage(body) {
       unread: 0,
     },
     record: {
-      id: `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      id: providerMessageId,
       conversationId,
       channel,
       direction: "outbound",
@@ -482,6 +483,7 @@ async function sendWhatsAppText(to, textBody) {
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error?.message || "Meta no acepto el mensaje de WhatsApp");
+  return payload.messages?.[0]?.id || `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
 function extractWhatsAppEvents(payload) {
@@ -491,11 +493,17 @@ function extractWhatsAppEvents(payload) {
   const entries = payload.entry || [];
   for (const entry of entries) {
     for (const change of entry.changes || []) {
+      const field = String(change.field || "messages");
       const value = change.value || {};
+      const businessPhone = normalizePhone(value.metadata?.display_phone_number || process.env.WHATSAPP_DISPLAY_PHONE_NUMBER || "");
       const contacts = new Map((value.contacts || []).map((contact) => [contact.wa_id, contact]));
-      for (const message of value.messages || []) {
-        const phone = normalizePhone(message.from || "");
-        const contact = contacts.get(message.from) || {};
+      for (const message of getWhatsAppMessageItems(value)) {
+        const fromPhone = normalizePhone(message.from || message.sender?.wa_id || message.sender?.id || "");
+        const toPhone = normalizePhone(message.to || message.recipient_id || message.recipient?.wa_id || message.recipient?.id || "");
+        const isEcho = isWhatsAppEcho(message, field, fromPhone, businessPhone);
+        const phone = isEcho ? toPhone || fromPhone : fromPhone || toPhone;
+        if (!phone) continue;
+        const contact = contacts.get(phone) || contacts.get(message.from) || {};
         const textBody = extractMessageText(message);
         const at = timestampToIso(message.timestamp);
         const conversationId = `whatsapp_${phone}`;
@@ -507,22 +515,24 @@ function extractWhatsAppEvents(payload) {
           name: contact.profile?.name || phone,
           lastMessage: textBody,
           lastAt: at,
-          unread: 1,
+          unread: isEcho ? 0 : 1,
         });
         messages.push({
           id: message.id || `wa_${Date.now()}_${Math.random().toString(16).slice(2)}`,
           conversationId,
           channel: "whatsapp",
-          direction: "inbound",
-          from: phone,
-          to: value.metadata?.display_phone_number || "",
+          direction: isEcho ? "outbound" : "inbound",
+          from: isEcho ? businessPhone || fromPhone || "business" : phone,
+          to: isEcho ? phone : businessPhone || value.metadata?.display_phone_number || "",
           text: textBody,
           at,
-          status: "received",
+          status: isEcho ? "sent" : "received",
+          sourceField: field,
+          attachments: extractMessageAttachments(message),
         });
 
         const referral = message.referral || message.context?.referral || {};
-        if (!referral.source_id && !referral.ctwa_clid) continue;
+        if (isEcho || (!referral.source_id && !referral.ctwa_clid)) continue;
         leads.push({
           id: `wa_${message.id || Date.now()}`,
           source: "whatsapp_cloud",
@@ -539,6 +549,32 @@ function extractWhatsAppEvents(payload) {
     }
   }
   return { leads, conversations, messages };
+}
+
+function getWhatsAppMessageItems(value) {
+  const candidates = [
+    value.messages,
+    value.message_echoes,
+    value.smb_message_echoes,
+    value.echoes,
+  ];
+  return candidates.flatMap((candidate) => {
+    if (Array.isArray(candidate)) return candidate;
+    if (candidate && typeof candidate === "object") return [candidate];
+    return [];
+  });
+}
+
+function isWhatsAppEcho(message, field, fromPhone, businessPhone) {
+  const normalizedField = field.toLowerCase();
+  return Boolean(
+    normalizedField.includes("echo") ||
+      message.from_me === true ||
+      message.fromMe === true ||
+      message.echo === true ||
+      message.direction === "outbound" ||
+      (businessPhone && fromPhone && businessPhone === fromPhone),
+  );
 }
 
 function extractMetaMessagingEvents(payload) {
@@ -584,7 +620,23 @@ function extractMessageText(message) {
   if (message.button?.text) return message.button.text;
   if (message.interactive?.button_reply?.title) return message.interactive.button_reply.title;
   if (message.interactive?.list_reply?.title) return message.interactive.list_reply.title;
+  if (message.image?.caption) return message.image.caption;
+  if (message.video?.caption) return message.video.caption;
+  if (message.document?.caption) return message.document.caption;
+  if (message.reaction?.emoji) return `Reaccionó ${message.reaction.emoji}`;
   return `[${message.type || "mensaje"}]`;
+}
+
+function extractMessageAttachments(message) {
+  return ["image", "video", "audio", "document", "sticker"]
+    .filter((type) => message[type])
+    .map((type) => ({
+      type,
+      id: message[type]?.id || "",
+      mimeType: message[type]?.mime_type || "",
+      filename: message[type]?.filename || "",
+      caption: message[type]?.caption || "",
+    }));
 }
 
 function upsertLeads(existing, incoming) {

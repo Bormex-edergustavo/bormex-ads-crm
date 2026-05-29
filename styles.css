@@ -561,6 +561,11 @@ textarea:focus {
   color: var(--muted);
 }
 
+.conversation-item .conversation-attribution {
+  color: var(--primary);
+  font-weight: 800;
+}
+
 .channel-pill {
   border-radius: 999px;
   display: inline-flex;
@@ -640,6 +645,14 @@ textarea:focus {
   display: block;
   font-size: 11px;
   opacity: 0.72;
+}
+
+.message-bubble small {
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  margin-bottom: 4px;
+  opacity: 0.78;
 }
 
 .reply-box {

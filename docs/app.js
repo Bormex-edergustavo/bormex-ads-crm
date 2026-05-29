@@ -216,7 +216,11 @@ function adKey(record) {
 }
 
 function findLeadForSale(sale) {
-  const phone = normalizePhone(sale.phone);
+  return findLeadForPhone(sale.phone);
+}
+
+function findLeadForPhone(phoneValue) {
+  const phone = normalizePhone(phoneValue);
   return [...state.leads]
     .filter((lead) => normalizePhone(lead.phone) === phone)
     .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
@@ -540,6 +544,11 @@ function getConversationRows() {
     .sort((a, b) => new Date(b.lastAt || 0) - new Date(a.lastAt || 0));
 }
 
+function getConversationLead(conversation) {
+  if (conversation.channel !== "whatsapp" || !conversation.phone) return null;
+  return findLeadForPhone(conversation.phone);
+}
+
 function renderCrm() {
   const list = document.getElementById("conversationList");
   const thread = document.getElementById("messageThread");
@@ -553,18 +562,20 @@ function renderCrm() {
   }
 
   if (!conversations.length) {
-    list.innerHTML = `<div class="empty">Cuando entren mensajes por webhook aparecerán aquí.</div>`;
+    list.innerHTML = `<div class="empty">Aquí aparecerán las conversaciones 1 a 1 nuevas que entregue WhatsApp.</div>`;
   } else {
     list.innerHTML = conversations
-      .map(
-        (conversation) => `
+      .map((conversation) => {
+        const lead = getConversationLead(conversation);
+        return `
           <button class="conversation-item ${conversation.id === activeConversationId ? "active" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button">
             <span class="channel-pill ${escapeHtml(conversation.channel)}">${getChannelLabel(conversation.channel)}</span>
             <strong>${escapeHtml(conversation.name || conversation.phone || conversation.contactId)}</strong>
             <small>${escapeHtml(conversation.lastMessage || "")}</small>
+            ${lead ? `<small class="conversation-attribution">${escapeHtml(lead.ad || lead.campaign || "Anuncio atribuido")}</small>` : ""}
           </button>
-        `,
-      )
+        `;
+      })
       .join("");
   }
 
@@ -582,10 +593,11 @@ function renderCrm() {
   }
 
   document.getElementById("replyForm").classList.remove("disabled");
+  const activeLead = getConversationLead(active);
   header.innerHTML = `
     <div>
       <h2>${escapeHtml(active.name || active.phone || active.contactId)}</h2>
-      <p>${getChannelLabel(active.channel)}${active.phone ? ` · ${escapeHtml(active.phone)}` : ""}</p>
+      <p>${getChannelLabel(active.channel)}${active.phone ? ` · ${escapeHtml(active.phone)}` : ""}${activeLead ? ` · ${escapeHtml(activeLead.ad || activeLead.campaign)}` : ""}</p>
     </div>
   `;
 
@@ -599,6 +611,7 @@ function renderCrm() {
           (message) => `
             <div class="message-bubble ${message.direction === "outbound" ? "outbound" : "inbound"}">
               <p>${escapeHtml(message.text || "")}</p>
+              ${message.attachments?.length ? `<small>${escapeHtml(message.attachments.map((item) => item.type).join(", "))}</small>` : ""}
               <span>${new Date(message.at || Date.now()).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" })}</span>
             </div>
           `,
