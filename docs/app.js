@@ -193,9 +193,10 @@ async function syncAdsFromMeta() {
 
 function normalizePhone(value) {
   const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
   if (digits.length === 10) return `52${digits}`;
   if (digits.length === 11 && digits.startsWith("1")) return `52${digits.slice(1)}`;
-  if (digits.length >= 12 && digits.startsWith("521")) return `52${digits.slice(3)}`;
+  if (digits.length >= 13 && digits.startsWith("521")) return `52${digits.slice(3)}`;
   return digits;
 }
 

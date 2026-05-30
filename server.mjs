@@ -322,7 +322,7 @@ async function syncMetaAds() {
   }
 
   const accountId = rawAccountId.startsWith("act_") ? rawAccountId : `act_${rawAccountId}`;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayInBusinessTimeZone();
   const fields = [
     "id",
     "name",
@@ -406,6 +406,21 @@ function normalizeMetaAd(ad) {
     messages,
     metaLeads: pickActionValue(actions, ["onsite_conversion.lead_grouped", "onsite_conversion.lead", "lead"]),
   };
+}
+
+function businessTimeZone() {
+  return process.env.BUSINESS_TIME_ZONE || process.env.ADS_TIME_ZONE || "America/Mexico_City";
+}
+
+function todayInBusinessTimeZone() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: businessTimeZone(),
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
 }
 
 function pickActionValue(actions, actionTypes) {
@@ -719,8 +734,10 @@ function normalizeRules(body) {
 
 function normalizePhone(value) {
   const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
   if (digits.length === 10) return `52${digits}`;
-  if (digits.length >= 12 && digits.startsWith("521")) return `52${digits.slice(3)}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `52${digits.slice(1)}`;
+  if (digits.length >= 13 && digits.startsWith("521")) return `52${digits.slice(3)}`;
   return digits;
 }
 

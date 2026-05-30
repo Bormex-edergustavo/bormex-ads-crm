@@ -12,6 +12,7 @@ const defaultDb = {
     minRoas: 2,
     minLeads: 8,
   },
+  webhookEvents: [],
   lastAdsSync: null,
   lastWebhookAt: null,
 };
@@ -40,6 +41,10 @@ Deno.serve(async (req) => {
       return html(STATIC_HTML);
     }
 
+    if (pathname === "/oauth/meta" && req.method === "GET") {
+      return await handleMetaOAuthCallback(url);
+    }
+
     if (pathname === "/health" && req.method === "GET") {
       return json({ ok: true, at: new Date().toISOString() });
     }
@@ -50,6 +55,10 @@ Deno.serve(async (req) => {
 
     if (pathname === "/api/state" && req.method === "GET") {
       return json(await readDb());
+    }
+
+    if (pathname === "/api/debug/parse-whatsapp" && req.method === "POST") {
+      return json(extractWhatsAppEvents(await readJson(req)));
     }
 
     if (pathname === "/api/messages" && req.method === "POST") {
@@ -117,10 +126,12 @@ Deno.serve(async (req) => {
     }
 
     if (pathname === "/webhooks/whatsapp" && req.method === "POST") {
-      const payload = extractWhatsAppEvents(await readJson(req));
+      const body = await readJson(req);
+      const payload = extractWhatsAppEvents(body);
       await upsertItems("leads", payload.leads);
       await upsertItems("conversations", payload.conversations);
       await upsertItems("messages", payload.messages);
+      await rememberWebhookEvent("whatsapp", body, payload);
       await setSetting("lastWebhookAt", new Date().toISOString());
       return json({ ok: true, leads: payload.leads.length, messages: payload.messages.length });
     }
@@ -130,9 +141,11 @@ Deno.serve(async (req) => {
     }
 
     if (pathname === "/webhooks/meta" && req.method === "POST") {
-      const payload = extractMetaMessagingEvents(await readJson(req));
+      const body = await readJson(req);
+      const payload = extractMetaMessagingEvents(body);
       await upsertItems("conversations", payload.conversations);
       await upsertItems("messages", payload.messages);
+      await rememberWebhookEvent("meta", body, { leads: [], ...payload });
       await setSetting("lastWebhookAt", new Date().toISOString());
       return json({ ok: true, messages: payload.messages.length });
     }
@@ -165,7 +178,7 @@ function configPayload() {
 }
 
 function isPublicPath(pathname: string) {
-  return pathname === "/webhooks/whatsapp" || pathname === "/webhooks/meta" || pathname === "/api/cron/sync";
+  return pathname === "/webhooks/whatsapp" || pathname === "/webhooks/meta" || pathname === "/api/cron/sync" || pathname === "/oauth/meta";
 }
 
 function isAuthorized(req: Request) {
@@ -207,6 +220,7 @@ async function readDb() {
     spend,
     ads,
     rules: settings.rules || defaultDb.rules,
+    webhookEvents: settings.webhookEvents || [],
     lastAdsSync: settings.lastAdsSync || null,
     lastWebhookAt: settings.lastWebhookAt || null,
   };
@@ -285,7 +299,7 @@ async function syncMetaAds() {
   }
 
   const accountId = rawAccountId.startsWith("act_") ? rawAccountId : `act_${rawAccountId}`;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayInBusinessTimeZone();
   const fields = [
     "id",
     "name",
@@ -366,6 +380,21 @@ function pickActionValue(actions: any[], actionTypes: string[]) {
   return 0;
 }
 
+function businessTimeZone() {
+  return Deno.env.get("BUSINESS_TIME_ZONE") || Deno.env.get("ADS_TIME_ZONE") || "America/Mexico_City";
+}
+
+function todayInBusinessTimeZone() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: businessTimeZone(),
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
 async function sendCrmMessage(body: any) {
   const channel = String(body.channel || "").trim();
   const conversationId = String(body.conversationId || "").trim();
@@ -433,6 +462,33 @@ function verifyWhatsAppWebhook(url: URL) {
   const challenge = url.searchParams.get("hub.challenge");
   if (mode === "subscribe" && token === verifyToken) return text(challenge || "");
   return text("Forbidden", 403);
+}
+
+async function handleMetaOAuthCallback(url: URL) {
+  const code = url.searchParams.get("code") || "";
+  const error = url.searchParams.get("error") || "";
+  const errorDescription = url.searchParams.get("error_description") || "";
+  const assetParams = Object.fromEntries(
+    ["business_id", "waba_id", "phone_number_id", "state"].map((key) => [key, url.searchParams.get(key) || ""]),
+  );
+
+  await setSetting("lastMetaOAuthCallback", {
+    at: new Date().toISOString(),
+    hasCode: Boolean(code),
+    codeLength: code.length,
+    error,
+    errorDescription,
+    ...assetParams,
+  });
+
+  const title = error ? "Meta devolvio un error" : code ? "Registro recibido" : "Callback recibido";
+  const message = error
+    ? errorDescription || error
+    : code
+      ? "Meta regreso correctamente al CRM. Ya puedes cerrar esta ventana y volver al panel."
+      : "Meta regreso al CRM, pero no incluyo codigo de autorizacion.";
+
+  return text(`${title}\n\n${message}`);
 }
 
 function extractWhatsAppEvents(payload: any) {
@@ -504,12 +560,54 @@ function getWhatsAppMessageItems(value: any) {
     value.message_echoes,
     value.smb_message_echoes,
     value.echoes,
+    value.history?.messages,
+    value.history?.data?.messages,
+    value.history?.payload?.messages,
+    value.history,
   ];
-  return candidates.flatMap((candidate) => {
+  const direct = candidates.flatMap((candidate) => {
     if (Array.isArray(candidate)) return candidate;
     if (candidate && typeof candidate === "object") return [candidate];
     return [];
-  });
+  }).filter(looksLikeWhatsAppMessage);
+  if (direct.length) return direct;
+  return collectNestedWhatsAppMessages(value);
+}
+
+function collectNestedWhatsAppMessages(root: any) {
+  const found = new Map<string, any>();
+  const visit = (node: any, depth = 0) => {
+    if (!node || depth > 8) return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item, depth + 1);
+      return;
+    }
+    if (typeof node !== "object") return;
+    if (looksLikeWhatsAppMessage(node)) {
+      found.set(String(node.id || `${node.from || ""}_${node.to || ""}_${node.timestamp || crypto.randomUUID()}`), node);
+    }
+    for (const value of Object.values(node)) visit(value, depth + 1);
+  };
+  visit(root);
+  return [...found.values()];
+}
+
+function looksLikeWhatsAppMessage(value: any) {
+  if (!value || typeof value !== "object") return false;
+  const hasSenderOrRecipient = Boolean(value.from || value.to || value.recipient_id || value.sender || value.recipient);
+  const hasMessageShape = Boolean(
+    value.text ||
+      value.button ||
+      value.interactive ||
+      value.image ||
+      value.video ||
+      value.audio ||
+      value.document ||
+      value.sticker ||
+      value.reaction ||
+      value.type,
+  );
+  return hasSenderOrRecipient && hasMessageShape;
 }
 
 function isWhatsAppEcho(message: any, field: string, fromPhone: string, businessPhone: string) {
@@ -620,8 +718,10 @@ function extractMessageAttachments(message: any) {
 
 function normalizePhone(value: unknown) {
   const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
   if (digits.length === 10) return `52${digits}`;
-  if (digits.length >= 12 && digits.startsWith("521")) return `52${digits.slice(3)}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `52${digits.slice(1)}`;
+  if (digits.length >= 13 && digits.startsWith("521")) return `52${digits.slice(3)}`;
   return digits;
 }
 
@@ -658,6 +758,43 @@ function maskValue(value: string) {
   if (!value) return "";
   if (value.length <= 8) return "configurado";
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+async function rememberWebhookEvent(source: string, body: any, parsed: { leads?: unknown[]; messages?: unknown[]; conversations?: unknown[] }) {
+  const settings = await readSettings();
+  const entry = {
+    id: crypto.randomUUID(),
+    at: new Date().toISOString(),
+    source,
+    object: body.object || "",
+    fields: getWebhookFields(body),
+    entries: Array.isArray(body.entry) ? body.entry.length : 0,
+    leads: parsed.leads?.length || 0,
+    messages: parsed.messages?.length || 0,
+    conversations: parsed.conversations?.length || 0,
+    sample: summarizeWebhookPayload(body),
+  };
+  const previous = Array.isArray(settings.webhookEvents) ? settings.webhookEvents : [];
+  await setSetting("webhookEvents", [entry, ...previous].slice(0, 20));
+}
+
+function getWebhookFields(body: any) {
+  const fields = new Set<string>();
+  for (const entry of body.entry || []) {
+    for (const change of entry.changes || []) fields.add(String(change.field || "messages"));
+  }
+  return [...fields];
+}
+
+function summarizeWebhookPayload(body: any) {
+  return {
+    entryIds: (body.entry || []).map((entry: any) => entry.id).filter(Boolean).slice(0, 5),
+    phoneNumberIds: (body.entry || [])
+      .flatMap((entry: any) => entry.changes || [])
+      .map((change: any) => change.value?.metadata?.phone_number_id)
+      .filter(Boolean)
+      .slice(0, 5),
+  };
 }
 
 async function readJson(req: Request) {
