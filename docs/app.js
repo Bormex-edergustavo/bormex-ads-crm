@@ -14,6 +14,9 @@ const defaultState = {
   spend: [],
   ads: [],
   campaignPeriods: [],
+  rangeAds: [],
+  rangeSpend: [],
+  rangeMetaRange: null,
   filters: {
     startDate: "",
     endDate: "",
@@ -214,15 +217,15 @@ async function syncAdsFromMeta() {
     rangeButton.textContent = "Actualizando...";
   }
   try {
-    const remoteState = await api("/api/sync/ads", {
+    const remoteState = await api("/api/ads-range", {
       method: "POST",
       body: JSON.stringify({ since: range.startDate, until: range.endDate }),
     });
-    state.spend = remoteState.spend || [];
-    state.ads = remoteState.ads || [];
+    state.rangeSpend = remoteState.spend || [];
+    state.rangeAds = remoteState.ads || [];
+    state.rangeMetaRange = remoteState.range || { since: range.startDate, until: range.endDate };
     saveState();
     render();
-    await syncFromServer();
     toast(`Panel actualizado del ${range.startDate} al ${range.endDate}`);
   } catch (error) {
     toast(error.message);
@@ -279,6 +282,8 @@ function findAdById(adIdValue) {
   const adId = normalizeAdId(adIdValue);
   if (!adId) return null;
   return (
+    (state.rangeAds || []).find((ad) => normalizeAdId(ad.id) === adId || normalizeAdId(ad.adId) === adId) ||
+    (state.rangeSpend || []).find((spend) => normalizeAdId(spend.adId) === adId) ||
     (state.ads || []).find((ad) => normalizeAdId(ad.id) === adId || normalizeAdId(ad.adId) === adId) ||
     (state.spend || []).find((spend) => normalizeAdId(spend.adId) === adId) ||
     null
@@ -333,6 +338,19 @@ function getFilteredSales() {
   return (state.sales || []).filter((sale) => isDateInSelectedRange(sale.date));
 }
 
+function hasLoadedSelectedRange() {
+  const range = getSelectedRange();
+  return state.rangeMetaRange?.since === range.startDate && state.rangeMetaRange?.until === range.endDate;
+}
+
+function dashboardAds() {
+  return hasLoadedSelectedRange() ? state.rangeAds || [] : state.ads || [];
+}
+
+function dashboardSpend() {
+  return hasLoadedSelectedRange() ? state.rangeSpend || [] : state.spend || [];
+}
+
 function getSaleAttribution(sale) {
   const saleAdId = normalizeAdId(sale.adId || sale.ad_id || sale.metaAdId);
   if (saleAdId) {
@@ -361,7 +379,7 @@ function getPerformance() {
   const map = new Map();
   const liveAdKeys = new Set();
 
-  for (const ad of state.ads || []) {
+  for (const ad of dashboardAds()) {
     const key = ad.id || `${ad.campaign || "Sin campaña"}::${ad.name || "Sin anuncio"}`;
     liveAdKeys.add(key);
     const metaMessages = Number(ad.messages || 0);
@@ -403,7 +421,7 @@ function getPerformance() {
     row.messages = Math.max(Number(row.messages || 0), row.trackedLeads);
   }
 
-  for (const spend of (state.spend || []).filter(spendMatchesSelectedRange)) {
+  for (const spend of dashboardSpend().filter(spendMatchesSelectedRange)) {
     const key = adKey(spend);
     if (!map.has(key)) {
       map.set(key, {
@@ -505,6 +523,14 @@ function renderRangeForm() {
   const range = getSelectedRange();
   if (document.activeElement !== form.elements.startDate) form.elements.startDate.value = range.startDate;
   if (document.activeElement !== form.elements.endDate) form.elements.endDate.value = range.endDate;
+  const status = document.getElementById("dashboardRangeStatus");
+  if (status) {
+    const loaded = hasLoadedSelectedRange();
+    const rangeText = `${range.startDate} a ${range.endDate}`;
+    status.textContent = loaded
+      ? `Mostrando datos de Meta Ads del ${rangeText}.`
+      : `Rango seleccionado: ${rangeText}. Presiona Actualizar rango para traer gasto y mensajes de Meta Ads.`;
+  }
 }
 
 function renderAdIdOptions() {

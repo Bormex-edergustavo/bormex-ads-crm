@@ -414,6 +414,13 @@ td {
   gap: 8px;
 }
 
+.range-status {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  margin: 12px 0 0;
+}
+
 label {
   display: grid;
   gap: 7px;

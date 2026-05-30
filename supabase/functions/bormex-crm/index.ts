@@ -67,6 +67,10 @@ Deno.serve(async (req) => {
       return json(extractWhatsAppEvents(await readJson(req)));
     }
 
+    if (pathname === "/api/ads-range" && req.method === "POST") {
+      return json(await syncMetaAds(await readJson(req)));
+    }
+
     if (pathname === "/api/messages" && req.method === "POST") {
       const body = await readJson(req);
       const message = await sendCrmMessage(body);

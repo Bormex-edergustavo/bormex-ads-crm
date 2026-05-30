@@ -89,6 +89,10 @@ const server = http.createServer(async (req, res) => {
       return json(res, filterStateForRole(await readDb(), accessRole));
     }
 
+    if (url.pathname === "/api/ads-range" && req.method === "POST") {
+      return json(res, await syncMetaAds(await readJson(req)));
+    }
+
     if (url.pathname === "/api/messages" && req.method === "POST") {
       const body = await readJson(req);
       const db = await readDb();
