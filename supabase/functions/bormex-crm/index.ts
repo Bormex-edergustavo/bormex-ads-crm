@@ -7,6 +7,7 @@ const defaultDb = {
   leads: [],
   spend: [],
   ads: [],
+  campaignPeriods: [],
   rules: {
     targetCpa: 600,
     minRoas: 2,
@@ -34,8 +35,12 @@ Deno.serve(async (req) => {
 
     const url = new URL(req.url);
     const pathname = normalizePath(url.pathname);
+    const accessRole = getAccessRole(req);
 
-    if (!isPublicPath(pathname) && !isAuthorized(req)) return unauthorized();
+    if (!isPublicPath(pathname) && !accessRole) return unauthorized();
+    if (!isPublicPath(pathname) && !isPathAllowed(pathname, req.method, accessRole)) {
+      return text("Acceso no permitido para este usuario", 403);
+    }
 
     if ((pathname === "/" || pathname === "/index.html") && req.method === "GET") {
       return html(STATIC_HTML);
@@ -50,11 +55,11 @@ Deno.serve(async (req) => {
     }
 
     if (pathname === "/api/config" && req.method === "GET") {
-      return json(configPayload());
+      return json(configPayload(accessRole));
     }
 
     if (pathname === "/api/state" && req.method === "GET") {
-      return json(await readDb());
+      return json(filterStateForRole(await readDb(), accessRole));
     }
 
     if (pathname === "/api/debug/parse-whatsapp" && req.method === "POST") {
@@ -92,16 +97,23 @@ Deno.serve(async (req) => {
     if (pathname === "/api/sales" && req.method === "POST") {
       const sale = normalizeSale(await readJson(req));
       await upsertItems("sales", [sale]);
-      return json(await readDb());
+      return json(filterStateForRole(await readDb(), accessRole));
     }
 
     if (pathname.startsWith("/api/sales/") && req.method === "DELETE") {
       await deleteItem("sales", decodeURIComponent(pathname.replace("/api/sales/", "")));
-      return json(await readDb());
+      return json(filterStateForRole(await readDb(), accessRole));
     }
 
     if (pathname === "/api/rules" && req.method === "POST") {
       await setSetting("rules", normalizeRules(await readJson(req)));
+      return json(await readDb());
+    }
+
+    if (pathname === "/api/campaign-periods" && req.method === "POST") {
+      const body = await readJson(req);
+      const periods = Array.isArray(body.periods) ? body.periods.map(normalizeCampaignPeriod) : [];
+      await setSetting("campaignPeriods", periods);
       return json(await readDb());
     }
 
@@ -118,7 +130,7 @@ Deno.serve(async (req) => {
       const [, , , collection, rawId] = pathname.split("/");
       if (!["sales", "leads", "spend"].includes(collection)) return text("Not found", 404);
       await deleteItem(collection as Collection, decodeURIComponent(rawId || ""));
-      return json(await readDb());
+      return json(filterStateForRole(await readDb(), accessRole));
     }
 
     if (pathname === "/webhooks/whatsapp" && req.method === "GET") {
@@ -163,7 +175,7 @@ function normalizePath(pathname: string) {
   return pathname;
 }
 
-function configPayload() {
+function configPayload(role = "") {
   return {
     metaAdsConfigured: Boolean(metaAdsAccessToken() && Deno.env.get("META_AD_ACCOUNT_ID")),
     whatsappWebhookConfigured: Boolean(Deno.env.get("WHATSAPP_VERIFY_TOKEN")),
@@ -174,6 +186,7 @@ function configPayload() {
     graphVersion: graphVersion(),
     panelAuthConfigured: Boolean(Deno.env.get("PANEL_PASSWORD")),
     adsSyncIntervalMinutes: Number(Deno.env.get("ADS_SYNC_INTERVAL_MINUTES") || 15),
+    role,
   };
 }
 
@@ -181,18 +194,41 @@ function isPublicPath(pathname: string) {
   return pathname === "/webhooks/whatsapp" || pathname === "/webhooks/meta" || pathname === "/api/cron/sync" || pathname === "/oauth/meta";
 }
 
-function isAuthorized(req: Request) {
+function getAccessRole(req: Request) {
   const password = Deno.env.get("PANEL_PASSWORD") || "";
-  if (!password) return true;
+  if (!password) return "ads";
   const header = req.headers.get("authorization") || "";
-  if (!header.startsWith("Basic ")) return false;
+  if (!header.startsWith("Basic ")) return "";
   const decoded = atob(header.slice(6));
   const separator = decoded.indexOf(":");
   const username = decoded.slice(0, separator);
   const incomingPassword = decoded.slice(separator + 1);
   const expectedUser = Deno.env.get("PANEL_USERNAME") || "";
   const userMatches = expectedUser ? username === expectedUser : true;
-  return userMatches && incomingPassword === password;
+  if (!userMatches) return "";
+  if (incomingPassword === password) return "ads";
+  if (incomingPassword === (Deno.env.get("SALES_PANEL_PASSWORD") || "1234")) return "sales";
+  return "";
+}
+
+function isPathAllowed(pathname: string, method: string, role: string) {
+  if (role === "ads") return true;
+  if (role !== "sales") return false;
+  if (method === "GET" && ["/", "/index.html", "/styles.css", "/app.js", "/privacy.html"].includes(pathname)) return true;
+  if (method === "GET" && ["/api/config", "/api/state"].includes(pathname)) return true;
+  if (method === "POST" && pathname === "/api/sales") return true;
+  if (method === "DELETE" && pathname.startsWith("/api/sales/")) return true;
+  if (method === "DELETE" && pathname.startsWith("/api/records/sales/")) return true;
+  return false;
+}
+
+function filterStateForRole(db: typeof defaultDb, role: string) {
+  if (role !== "sales") return db;
+  return {
+    ...structuredClone(defaultDb),
+    sales: db.sales || [],
+    rules: db.rules || defaultDb.rules,
+  };
 }
 
 function unauthorized() {
@@ -220,6 +256,7 @@ async function readDb() {
     spend,
     ads,
     rules: settings.rules || defaultDb.rules,
+    campaignPeriods: settings.campaignPeriods || [],
     webhookEvents: settings.webhookEvents || [],
     lastAdsSync: settings.lastAdsSync || null,
     lastWebhookAt: settings.lastWebhookAt || null,
@@ -656,7 +693,18 @@ function normalizeSale(body: any) {
     ad: String(body.ad || ""),
     adset: String(body.adset || ""),
     campaign: String(body.campaign || ""),
+    campaignId: String(body.campaignId || ""),
     attributionSource: String(body.attributionSource || ""),
+  };
+}
+
+function normalizeCampaignPeriod(body: any) {
+  return {
+    id: String(body.id || body.key || crypto.randomUUID()),
+    campaignId: String(body.campaignId || ""),
+    campaign: String(body.campaign || "Sin campaña"),
+    startDate: String(body.startDate || ""),
+    endDate: String(body.endDate || ""),
   };
 }
 

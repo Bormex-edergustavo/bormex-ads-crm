@@ -40,7 +40,9 @@
             <h1 id="viewTitle">Panel</h1>
           </div>
           <div class="topbar-actions">
+            <span class="role-badge" id="roleBadge">Ads</span>
             <button class="secondary-button" id="exportJson" type="button">Exportar JSON</button>
+            <button class="secondary-button" id="logoutPanel" type="button">Salir</button>
             <button class="primary-button" data-open-sale type="button">Registrar venta</button>
           </div>
         </header>
@@ -119,6 +121,30 @@
               <div class="activity-list" id="recentSales"></div>
             </section>
           </div>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Fechas de campañas</h2>
+                <p>Las ventas solo cuentan para una campaña cuando caen dentro de su fecha de inicio y fin.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Campaña</th>
+                    <th>Inicio</th>
+                    <th>Fin</th>
+                    <th>Ventas del rango</th>
+                    <th>Ingresos del rango</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="campaignPeriodsTable"></tbody>
+              </table>
+            </div>
+          </section>
         </section>
 
         <section class="view" id="crmView">

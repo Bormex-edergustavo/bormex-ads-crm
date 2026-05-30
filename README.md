@@ -6,7 +6,7 @@ Dashboard para registrar ventas de WhatsApp y atribuirlas a anuncios por numero 
 
 - Panel publico: https://bormex-edergustavo.github.io/bormex-ads-crm/
 - Backend Supabase Edge Function: https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm
-- El panel pide solo un codigo. En produccion se configura con `PANEL_PASSWORD`.
+- El panel pide solo un codigo: `2607` para acceso completo y `1234` para registrar ventas.
 - La sincronizacion de Meta Ads corre cada 15 minutos con `pg_cron` en Supabase.
 - Las ventas, leads, mensajes, anuncios y gasto se guardan en tablas `bormex_*` dentro de Supabase.
 
@@ -39,6 +39,7 @@ Luego abre `http://127.0.0.1:4173`.
 - `WHATSAPP_PHONE_NUMBER_ID`: numero de WhatsApp Business Platform.
 - `WHATSAPP_BUSINESS_ACCOUNT_ID`: cuenta de WhatsApp Business.
 - `PANEL_PASSWORD`: codigo del panel.
+- `SALES_PANEL_PASSWORD`: codigo opcional para el acceso de ventas; si no existe usa `1234`.
 - `CRON_SECRET`: secreto privado que protege la ruta programada `/api/cron/sync`.
 
 ## Pendiente pro

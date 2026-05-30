@@ -199,6 +199,19 @@ h2 {
   flex-wrap: wrap;
 }
 
+.role-badge {
+  align-items: center;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: #455468;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
 .table-actions {
   align-items: center;
   display: flex;

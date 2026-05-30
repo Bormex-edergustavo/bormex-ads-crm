@@ -1,7 +1,10 @@
 const STORAGE_KEY = "ventas_ads_state_v1";
 const AUTH_STORAGE_KEY = "ventas_ads_panel_code_v1";
+const ADS_ACCESS_CODE = "2607";
+const SALES_ACCESS_CODE = "1234";
 const API_BASE = getApiBase();
 let panelCode = localStorage.getItem(AUTH_STORAGE_KEY) || "";
+let accessRole = roleFromCode(panelCode);
 
 const defaultState = {
   conversations: [],
@@ -10,6 +13,7 @@ const defaultState = {
   leads: [],
   spend: [],
   ads: [],
+  campaignPeriods: [],
   rules: {
     targetCpa: 600,
     minRoas: 2,
@@ -32,6 +36,16 @@ const numberFormat = new Intl.NumberFormat("es-MX", {
 });
 
 const today = () => new Date().toISOString().slice(0, 10);
+
+function roleFromCode(code) {
+  if (String(code || "").trim() === SALES_ACCESS_CODE) return "sales";
+  if (String(code || "").trim() === ADS_ACCESS_CODE) return "ads";
+  return "";
+}
+
+function isSalesRole() {
+  return accessRole === "sales";
+}
 
 function uid(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -110,6 +124,7 @@ function showAuthGate() {
   document.getElementById("authForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     panelCode = event.currentTarget.elements.code.value.trim();
+    accessRole = roleFromCode(panelCode);
     localStorage.setItem(AUTH_STORAGE_KEY, panelCode);
     hideAuthGate();
     await syncFromServer();
@@ -125,12 +140,14 @@ async function syncFromServer() {
   try {
     const [config, remoteState] = await Promise.all([api("/api/config"), api("/api/state")]);
     serverAvailable = true;
+    accessRole = config.role || roleFromCode(panelCode) || accessRole;
     state.conversations = remoteState.conversations || state.conversations;
     state.messages = remoteState.messages || state.messages;
     state.sales = remoteState.sales || state.sales;
     state.leads = remoteState.leads || state.leads;
     state.spend = remoteState.spend || state.spend;
     state.ads = remoteState.ads || state.ads;
+    state.campaignPeriods = remoteState.campaignPeriods || state.campaignPeriods;
     state.rules = remoteState.rules || state.rules;
     renderConnectionStatus(config, remoteState);
     saveState();
@@ -242,6 +259,50 @@ function adName(record) {
   return record?.name || record?.ad || "";
 }
 
+function campaignKey(record) {
+  const campaignId = String(record?.campaignId || "").trim();
+  if (campaignId) return `campaign:${campaignId}`;
+  const campaign = String(record?.campaign || "Sin campaña").trim() || "Sin campaña";
+  return `campaign-name:${campaign.toLowerCase()}`;
+}
+
+function normalizeCampaignPeriod(period) {
+  const campaign = String(period.campaign || "Sin campaña").trim() || "Sin campaña";
+  const campaignId = String(period.campaignId || "").trim();
+  const id = String(period.id || period.key || campaignKey({ campaignId, campaign }));
+  return {
+    id,
+    campaignId,
+    campaign,
+    startDate: String(period.startDate || period.start || ""),
+    endDate: String(period.endDate || period.end || ""),
+  };
+}
+
+function getCampaignPeriod(key) {
+  return (state.campaignPeriods || []).find((period) => period.id === key) || null;
+}
+
+function getAttributionCampaignKey(attribution) {
+  return campaignKey({
+    campaignId: attribution?.campaignId || "",
+    campaign: attribution?.campaign || "Sin campaña",
+  });
+}
+
+function isDateInsidePeriod(dateValue, period) {
+  if (!period) return true;
+  const date = String(dateValue || "");
+  if (period.startDate && date < period.startDate) return false;
+  if (period.endDate && date > period.endDate) return false;
+  return true;
+}
+
+function saleMatchesCampaignPeriod(sale, attribution) {
+  const key = getAttributionCampaignKey(attribution);
+  return isDateInsidePeriod(sale.date, getCampaignPeriod(key));
+}
+
 function getSaleAttribution(sale) {
   const saleAdId = normalizeAdId(sale.adId || sale.ad_id || sale.metaAdId);
   if (saleAdId) {
@@ -249,6 +310,7 @@ function getSaleAttribution(sale) {
     return {
       source: "manual_ad_id",
       campaign: sale.campaign || matchedAd?.campaign || "ID manual",
+      campaignId: sale.campaignId || matchedAd?.campaignId || "",
       adset: sale.adset || matchedAd?.adset || "",
       ad: sale.ad || adName(matchedAd) || `Anuncio ${saleAdId}`,
       adId: saleAdId,
@@ -338,11 +400,13 @@ function getPerformance() {
   for (const sale of state.sales) {
     const attribution = getSaleAttribution(sale);
     if (!attribution) continue;
+    if (!saleMatchesCampaignPeriod(sale, attribution)) continue;
     const key = adKey(attribution);
     if (!map.has(key)) {
       map.set(key, {
         key,
         campaign: attribution.campaign || "Sin campaña",
+        campaignId: attribution.campaignId || "",
         ad: attribution.ad || "Sin anuncio",
         adId: attribution.adId || "",
         leads: 0,
@@ -392,6 +456,7 @@ function recommendationLabel(value) {
 }
 
 function render() {
+  applyRoleAccess();
   renderMetrics();
   renderCrm();
   renderAdIdOptions();
@@ -400,7 +465,9 @@ function render() {
   renderSalesTable();
   renderLeadsTable();
   renderSpendTable();
+  renderCampaignPeriods();
   fillRules();
+  applyRoleAccess();
 }
 
 function renderAdIdOptions() {
@@ -421,8 +488,9 @@ function renderMetrics() {
   const performance = getPerformance();
   const spend = performance.reduce((sum, item) => sum + item.spend, 0);
   const messages = performance.reduce((sum, item) => sum + Number(item.messages || 0), 0);
-  const revenue = state.sales.reduce((sum, sale) => sum + Number(sale.amount || 0), 0);
-  const cpa = state.sales.length ? spend / state.sales.length : 0;
+  const revenue = performance.reduce((sum, item) => sum + Number(item.revenue || 0), 0);
+  const sales = performance.reduce((sum, item) => sum + Number(item.sales || 0), 0);
+  const cpa = sales ? spend / sales : 0;
   const roas = spend ? revenue / spend : 0;
   const costPerMessage = messages ? spend / messages : 0;
   document.getElementById("metricSpend").textContent = money.format(spend);
@@ -567,6 +635,74 @@ function renderSpendTable() {
     .join("");
 }
 
+function collectCampaignRows() {
+  const rows = new Map();
+  const nameToKey = new Map();
+  const upsert = (record) => {
+    if (!record) return;
+    const campaign = String(record.campaign || "Sin campaña").trim() || "Sin campaña";
+    const campaignId = String(record.campaignId || "").trim();
+    const nameKey = campaign.toLowerCase();
+    const key = campaignId ? campaignKey({ campaignId, campaign }) : nameToKey.get(nameKey) || campaignKey({ campaignId, campaign });
+    if (campaignId) nameToKey.set(nameKey, key);
+    const period = getCampaignPeriod(key);
+    const current = rows.get(key) || {};
+    rows.set(key, {
+      ...current,
+      key,
+      campaignId: campaignId || current.campaignId || period?.campaignId || "",
+      campaign: campaign !== "Sin campaña" ? campaign : current.campaign || period?.campaign || campaign,
+      startDate: period?.startDate || "",
+      endDate: period?.endDate || "",
+    });
+  };
+
+  (state.ads || []).forEach(upsert);
+  (state.spend || []).forEach(upsert);
+  for (const sale of state.sales || []) upsert(getSaleAttribution(sale));
+  for (const period of state.campaignPeriods || []) upsert(period);
+  return [...rows.values()].sort((a, b) => a.campaign.localeCompare(b.campaign, "es"));
+}
+
+function getCampaignPeriodStats(row) {
+  const stats = { sales: 0, revenue: 0 };
+  for (const sale of state.sales || []) {
+    const attribution = getSaleAttribution(sale);
+    if (!attribution) continue;
+    if (getAttributionCampaignKey(attribution) !== row.key) continue;
+    if (!isDateInsidePeriod(sale.date, getCampaignPeriod(row.key))) continue;
+    stats.sales += 1;
+    stats.revenue += Number(sale.amount || 0);
+  }
+  return stats;
+}
+
+function renderCampaignPeriods() {
+  const tbody = document.getElementById("campaignPeriodsTable");
+  if (!tbody) return;
+  const rows = collectCampaignRows();
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">Cuando haya campañas sincronizadas aparecerán aquí.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows
+    .map((row) => {
+      const stats = getCampaignPeriodStats(row);
+      return `
+        <tr>
+          <td>${escapeHtml(row.campaign)}</td>
+          <td><input type="date" value="${escapeHtml(row.startDate || "")}" data-campaign-date="${escapeHtml(row.key)}" data-field="startDate" /></td>
+          <td><input type="date" value="${escapeHtml(row.endDate || "")}" data-campaign-date="${escapeHtml(row.key)}" data-field="endDate" /></td>
+          <td>${stats.sales}</td>
+          <td>${money.format(stats.revenue)}</td>
+          <td><button class="secondary-button compact" data-save-campaign-period="${escapeHtml(row.key)}" type="button">Guardar</button></td>
+        </tr>
+      `;
+    })
+    .join("");
+}
+
 function fillRules() {
   const form = document.getElementById("rulesForm");
   form.elements.targetCpa.value = state.rules.targetCpa;
@@ -575,6 +711,7 @@ function fillRules() {
 }
 
 function setView(view) {
+  if (isSalesRole() && view !== "sales") view = "sales";
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === view);
   });
@@ -589,6 +726,21 @@ function setView(view) {
     ads: "Anuncios",
     settings: "Datos",
   }[view];
+}
+
+function applyRoleAccess() {
+  const salesOnly = isSalesRole();
+  document.body.dataset.role = accessRole || "unknown";
+  document.querySelectorAll(".nav-item").forEach((button) => {
+    button.hidden = salesOnly && button.dataset.view !== "sales";
+  });
+  document.getElementById("exportJson").hidden = salesOnly;
+  document.getElementById("clearDemoData").hidden = salesOnly;
+  document.getElementById("roleBadge").textContent = salesOnly ? "Ventas" : "Ads";
+  if (salesOnly) {
+    const activeView = document.querySelector(".nav-item.active")?.dataset.view || "sales";
+    if (activeView !== "sales") setView("sales");
+  }
 }
 
 function getChannelLabel(channel) {
@@ -712,6 +864,7 @@ function applyManualAdAttribution(sale, adIdInput) {
   const matchedAd = findAdById(adId);
   sale.adId = adId;
   sale.campaign = adId ? matchedAd?.campaign || sale.campaign || "" : "";
+  sale.campaignId = adId ? matchedAd?.campaignId || sale.campaignId || "" : "";
   sale.adset = adId ? matchedAd?.adset || sale.adset || "" : "";
   sale.ad = adId ? adName(matchedAd) || sale.ad || "" : "";
   sale.attributionSource = adId ? "manual_ad_id" : "";
@@ -753,8 +906,47 @@ function applyRemoteState(remoteState) {
   state.leads = remoteState.leads || state.leads;
   state.spend = remoteState.spend || state.spend;
   state.ads = remoteState.ads || state.ads;
+  state.campaignPeriods = remoteState.campaignPeriods || state.campaignPeriods;
   state.rules = remoteState.rules || state.rules;
   saveState();
+}
+
+async function saveCampaignPeriod(key) {
+  const row = collectCampaignRows().find((item) => item.key === key);
+  if (!row) return;
+  const inputs = [...document.querySelectorAll("[data-campaign-date]")].filter((input) => input.dataset.campaignDate === key);
+  const startDate = inputs.find((input) => input.dataset.field === "startDate")?.value || "";
+  const endDate = inputs.find((input) => input.dataset.field === "endDate")?.value || "";
+  if (startDate && endDate && startDate > endDate) {
+    toast("La fecha de inicio no puede ser mayor que la fecha fin");
+    return;
+  }
+  const period = normalizeCampaignPeriod({
+    id: key,
+    campaignId: row.campaignId,
+    campaign: row.campaign,
+    startDate,
+    endDate,
+  });
+  const next = [...(state.campaignPeriods || []).filter((item) => item.id !== key), period].filter(
+    (item) => item.startDate || item.endDate,
+  );
+  try {
+    if (serverAvailable) {
+      const remoteState = await api("/api/campaign-periods", {
+        method: "POST",
+        body: JSON.stringify({ periods: next }),
+      });
+      applyRemoteState(remoteState);
+    } else {
+      state.campaignPeriods = next;
+      saveState();
+    }
+    render();
+    toast("Fechas de campaña guardadas");
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 function persistAndRender(message) {
@@ -977,6 +1169,12 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const saveCampaignButton = event.target.closest("[data-save-campaign-period]");
+  if (saveCampaignButton) {
+    saveCampaignPeriod(saveCampaignButton.dataset.saveCampaignPeriod);
+    return;
+  }
+
   const button = event.target.closest("[data-delete]");
   if (!button) return;
   const collection = button.dataset.delete;
@@ -1005,7 +1203,7 @@ document.getElementById("exportJson").addEventListener("click", () => {
 
 document.getElementById("exportSalesCsv").addEventListener("click", () => {
   const rows = state.sales.map((sale) => ({ ...sale, product: getSaleProducts(sale).join("|") }));
-  download(`ventas-${today()}.csv`, toCsv(rows, ["phone", "product", "amount", "date", "adId", "ad", "campaign"]), "text/csv");
+  download(`ventas-${today()}.csv`, toCsv(rows, ["phone", "product", "amount", "date", "adId", "ad", "campaign", "campaignId"]), "text/csv");
 });
 
 document.getElementById("exportLeadsCsv").addEventListener("click", () => {
@@ -1090,13 +1288,19 @@ document.getElementById("clearDemoData").addEventListener("click", () => {
   persistAndRender("Datos limpiados");
 });
 
-document.querySelectorAll('input[type="date"]').forEach((input) => {
-  input.value = today();
+document.getElementById("logoutPanel").addEventListener("click", () => {
+  panelCode = "";
+  accessRole = "";
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+  showAuthGate();
 });
+
+document.getElementById("saleForm").elements.date.value = today();
 
 render();
 saveState();
 
+if (!panelCode) showAuthGate();
 syncFromServer().then(render);
 setInterval(() => {
   syncFromServer().then(render);

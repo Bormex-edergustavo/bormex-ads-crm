@@ -30,6 +30,7 @@ const defaultDb = {
   leads: [],
   spend: [],
   ads: [],
+  campaignPeriods: [],
   rules: {
     targetCpa: 600,
     minRoas: 2,
@@ -42,9 +43,13 @@ const defaultDb = {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    const accessRole = getAccessRole(req);
 
-    if (!isPublicPath(url.pathname) && !isAuthorized(req)) {
+    if (!isPublicPath(url.pathname) && !accessRole) {
       return unauthorized(res);
+    }
+    if (!isPublicPath(url.pathname) && !isPathAllowed(url.pathname, req.method, accessRole)) {
+      return text(res, "Acceso no permitido para este usuario", 403);
     }
 
     if (url.pathname === "/api/config" && req.method === "POST") {
@@ -60,6 +65,7 @@ const server = http.createServer(async (req, res) => {
         graphVersion: graphVersion(),
         panelAuthConfigured: Boolean(process.env.PANEL_PASSWORD),
         adsSyncIntervalMinutes: Math.round(ADS_SYNC_INTERVAL_MS / 60000),
+        role: accessRole,
       });
     }
 
@@ -74,11 +80,12 @@ const server = http.createServer(async (req, res) => {
         graphVersion: graphVersion(),
         panelAuthConfigured: Boolean(process.env.PANEL_PASSWORD),
         adsSyncIntervalMinutes: Math.round(ADS_SYNC_INTERVAL_MS / 60000),
+        role: accessRole,
       });
     }
 
     if (url.pathname === "/api/state") {
-      return json(res, await readDb());
+      return json(res, filterStateForRole(await readDb(), accessRole));
     }
 
     if (url.pathname === "/api/messages" && req.method === "POST") {
@@ -107,7 +114,7 @@ const server = http.createServer(async (req, res) => {
       const sale = normalizeSale(body);
       db.sales = upsertById(db.sales, [sale]);
       await writeDb(db);
-      return json(res, db);
+      return json(res, filterStateForRole(db, accessRole));
     }
 
     if (url.pathname.startsWith("/api/sales/") && req.method === "DELETE") {
@@ -115,13 +122,22 @@ const server = http.createServer(async (req, res) => {
       const db = await readDb();
       db.sales = db.sales.filter((sale) => sale.id !== id);
       await writeDb(db);
-      return json(res, db);
+      return json(res, filterStateForRole(db, accessRole));
     }
 
     if (url.pathname === "/api/rules" && req.method === "POST") {
       const body = await readJson(req);
       const db = await readDb();
       db.rules = normalizeRules(body);
+      await writeDb(db);
+      return json(res, db);
+    }
+
+    if (url.pathname === "/api/campaign-periods" && req.method === "POST") {
+      const body = await readJson(req);
+      const rows = Array.isArray(body.periods) ? body.periods : [];
+      const db = await readDb();
+      db.campaignPeriods = rows.map(normalizeCampaignPeriod);
       await writeDb(db);
       return json(res, db);
     }
@@ -144,7 +160,7 @@ const server = http.createServer(async (req, res) => {
       const id = decodeURIComponent(rawId || "");
       db[collection] = db[collection].filter((item) => item.id !== id);
       await writeDb(db);
-      return json(res, db);
+      return json(res, filterStateForRole(db, accessRole));
     }
 
     if (url.pathname === "/webhooks/whatsapp" && req.method === "GET") {
@@ -279,17 +295,40 @@ function isPublicPath(pathname) {
   return pathname === "/webhooks/whatsapp" || pathname === "/webhooks/meta";
 }
 
-function isAuthorized(req) {
-  if (!process.env.PANEL_PASSWORD) return true;
+function getAccessRole(req) {
+  if (!process.env.PANEL_PASSWORD) return "ads";
   const header = req.headers.authorization || "";
-  if (!header.startsWith("Basic ")) return false;
+  if (!header.startsWith("Basic ")) return "";
   const decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
   const separator = decoded.indexOf(":");
   const username = decoded.slice(0, separator);
   const password = decoded.slice(separator + 1);
   const expectedUser = process.env.PANEL_USERNAME || "";
   const userMatches = expectedUser ? username === expectedUser : true;
-  return userMatches && password === process.env.PANEL_PASSWORD;
+  if (!userMatches) return "";
+  if (password === process.env.PANEL_PASSWORD) return "ads";
+  if (password === (process.env.SALES_PANEL_PASSWORD || "1234")) return "sales";
+  return "";
+}
+
+function isPathAllowed(pathname, method, role) {
+  if (role === "ads") return true;
+  if (role !== "sales") return false;
+  if (method === "GET" && ["/", "/index.html", "/styles.css", "/app.js", "/privacy.html"].includes(pathname)) return true;
+  if (method === "GET" && ["/api/config", "/api/state"].includes(pathname)) return true;
+  if (method === "POST" && pathname === "/api/sales") return true;
+  if (method === "DELETE" && pathname.startsWith("/api/sales/")) return true;
+  if (method === "DELETE" && pathname.startsWith("/api/records/sales/")) return true;
+  return false;
+}
+
+function filterStateForRole(db, role) {
+  if (role !== "sales") return db;
+  return {
+    ...structuredClone(defaultDb),
+    sales: db.sales || [],
+    rules: db.rules || defaultDb.rules,
+  };
 }
 
 function unauthorized(res) {
@@ -696,7 +735,18 @@ function normalizeSale(body) {
     ad: String(body.ad || ""),
     adset: String(body.adset || ""),
     campaign: String(body.campaign || ""),
+    campaignId: String(body.campaignId || ""),
     attributionSource: String(body.attributionSource || ""),
+  };
+}
+
+function normalizeCampaignPeriod(body) {
+  return {
+    id: String(body.id || body.key || `campaign_${Date.now()}_${Math.random().toString(16).slice(2)}`),
+    campaignId: String(body.campaignId || ""),
+    campaign: String(body.campaign || "Sin campaña"),
+    startDate: String(body.startDate || ""),
+    endDate: String(body.endDate || ""),
   };
 }
 
