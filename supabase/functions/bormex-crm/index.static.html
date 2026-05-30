@@ -207,6 +207,12 @@ h2 {
   flex-wrap: wrap;
 }
 
+.table-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
 .primary-button,
 .secondary-button,
 .ghost-button,
@@ -963,6 +969,11 @@ textarea:focus {
                 Fecha
                 <input name="date" type="date" required />
               </label>
+              <label class="full">
+                ID del anuncio
+                <input name="adId" list="adIdOptions" placeholder="Pega el ad_id de Business Suite" />
+                <datalist id="adIdOptions"></datalist>
+              </label>
               <div class="form-actions full">
                 <button class="primary-button" type="submit">Guardar venta</button>
                 <button class="secondary-button" id="fillSaleExample" type="button">Ejemplo</button>
@@ -986,6 +997,7 @@ textarea:focus {
                     <th>Número</th>
                     <th>Producto</th>
                     <th>Monto</th>
+                    <th>ID anuncio</th>
                     <th>Anuncio atribuido</th>
                     <th></th>
                   </tr>
@@ -1072,6 +1084,7 @@ textarea:focus {
                     <th>Fecha</th>
                     <th>Campaña</th>
                     <th>Anuncio</th>
+                    <th>ID anuncio</th>
                     <th>Gasto</th>
                     <th>Presupuesto</th>
                     <th></th>
@@ -1108,7 +1121,7 @@ textarea:focus {
                 <button class="primary-button" id="importCsv" type="button">Importar CSV</button>
               </div>
               <div class="hint">
-                Ventas: phone,product,amount,date<br />
+                Ventas: phone,product,amount,date,adId<br />
                 Leads: phone,campaign,adset,ad,adId,date,message<br />
                 Gasto: campaign,ad,adId,spend,dailyBudget,date
               </div>
@@ -1352,6 +1365,14 @@ function parseMoney(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function normalizeAdId(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const numeric = text.match(/(?:ad[_\s-]?id|source[_\s-]?id)?\D*(\d{8,})/i);
+  if (numeric) return numeric[1];
+  return text.replace(/^ad[_\s-]?id[:\s-]*/i, "").trim();
+}
+
 function getSaleProducts(sale) {
   if (Array.isArray(sale.products) && sale.products.length) return sale.products;
   if (sale.product) return [sale.product];
@@ -1364,6 +1385,36 @@ function adKey(record) {
 
 function findLeadForSale(sale) {
   return findLeadForPhone(sale.phone);
+}
+
+function findAdById(adIdValue) {
+  const adId = normalizeAdId(adIdValue);
+  if (!adId) return null;
+  return (
+    (state.ads || []).find((ad) => normalizeAdId(ad.id) === adId || normalizeAdId(ad.adId) === adId) ||
+    (state.spend || []).find((spend) => normalizeAdId(spend.adId) === adId) ||
+    null
+  );
+}
+
+function adName(record) {
+  return record?.name || record?.ad || "";
+}
+
+function getSaleAttribution(sale) {
+  const saleAdId = normalizeAdId(sale.adId || sale.ad_id || sale.metaAdId);
+  if (saleAdId) {
+    const matchedAd = findAdById(saleAdId);
+    return {
+      source: "manual_ad_id",
+      campaign: sale.campaign || matchedAd?.campaign || "ID manual",
+      adset: sale.adset || matchedAd?.adset || "",
+      ad: sale.ad || adName(matchedAd) || `Anuncio ${saleAdId}`,
+      adId: saleAdId,
+    };
+  }
+  const lead = findLeadForSale(sale);
+  return lead ? { ...lead, source: "lead" } : null;
 }
 
 function findLeadForPhone(phoneValue) {
@@ -1444,15 +1495,15 @@ function getPerformance() {
   }
 
   for (const sale of state.sales) {
-    const lead = findLeadForSale(sale);
-    if (!lead) continue;
-    const key = adKey(lead);
+    const attribution = getSaleAttribution(sale);
+    if (!attribution) continue;
+    const key = adKey(attribution);
     if (!map.has(key)) {
       map.set(key, {
         key,
-        campaign: lead.campaign || "Sin campaña",
-        ad: lead.ad || "Sin anuncio",
-        adId: lead.adId || "",
+        campaign: attribution.campaign || "Sin campaña",
+        ad: attribution.ad || "Sin anuncio",
+        adId: attribution.adId || "",
         leads: 0,
         trackedLeads: 0,
         messages: 0,
@@ -1502,12 +1553,27 @@ function recommendationLabel(value) {
 function render() {
   renderMetrics();
   renderCrm();
+  renderAdIdOptions();
   renderPerformance();
   renderRecentSales();
   renderSalesTable();
   renderLeadsTable();
   renderSpendTable();
   fillRules();
+}
+
+function renderAdIdOptions() {
+  const datalist = document.getElementById("adIdOptions");
+  if (!datalist) return;
+  const seen = new Set();
+  const rows = [];
+  for (const ad of state.ads || []) {
+    const id = normalizeAdId(ad.id || ad.adId);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    rows.push({ id, label: `${ad.name || ad.ad || "Sin anuncio"} / ${ad.campaign || "Sin campaña"}` });
+  }
+  datalist.innerHTML = rows.map((row) => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.label)}</option>`).join("");
 }
 
 function renderMetrics() {
@@ -1568,11 +1634,11 @@ function renderRecentSales() {
 
   container.innerHTML = rows
     .map((sale) => {
-      const lead = findLeadForSale(sale);
+      const attribution = getSaleAttribution(sale);
       return `
         <div class="activity-item">
           <strong>${escapeHtml(getSaleProducts(sale).join(", "))} · ${money.format(Number(sale.amount || 0))}</strong>
-          <span>${escapeHtml(sale.phone)} · ${lead ? escapeHtml(lead.ad) : "Sin atribución"}</span>
+          <span>${escapeHtml(sale.phone)} · ${attribution ? escapeHtml(attribution.ad) : "Sin atribución"}</span>
         </div>
       `;
     })
@@ -1582,22 +1648,29 @@ function renderRecentSales() {
 function renderSalesTable() {
   const tbody = document.getElementById("salesTable");
   if (!state.sales.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">Registra la primera venta para empezar.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">Registra la primera venta para empezar.</td></tr>`;
     return;
   }
 
   tbody.innerHTML = [...state.sales]
     .sort((a, b) => new Date(b.date) - new Date(a.date))
     .map((sale) => {
-      const lead = findLeadForSale(sale);
+      const attribution = getSaleAttribution(sale);
+      const saleAdId = normalizeAdId(sale.adId);
       return `
         <tr>
           <td>${escapeHtml(sale.date)}</td>
           <td>${escapeHtml(sale.phone)}</td>
           <td>${escapeHtml(getSaleProducts(sale).join(", "))}</td>
           <td>${money.format(Number(sale.amount || 0))}</td>
-          <td>${lead ? `${escapeHtml(lead.ad)} / ${escapeHtml(lead.campaign)}` : "Sin coincidencia"}</td>
-          <td><button class="danger-button" data-delete="sales" data-id="${sale.id}" type="button">Eliminar</button></td>
+          <td>${saleAdId ? escapeHtml(saleAdId) : "Sin ID"}</td>
+          <td>${attribution ? `${escapeHtml(attribution.ad)} / ${escapeHtml(attribution.campaign)}` : "Sin coincidencia"}</td>
+          <td>
+            <div class="table-actions">
+              <button class="secondary-button compact" data-edit-sale-ad="${sale.id}" type="button">Editar ID</button>
+              <button class="danger-button compact" data-delete="sales" data-id="${sale.id}" type="button">Eliminar</button>
+            </div>
+          </td>
         </tr>
       `;
     })
@@ -1631,7 +1704,7 @@ function renderLeadsTable() {
 function renderSpendTable() {
   const tbody = document.getElementById("spendTable");
   if (!state.spend.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">Los anuncios activos aparecerán aquí cuando conectemos Meta Ads API.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">Los anuncios activos aparecerán aquí cuando conectemos Meta Ads API.</td></tr>`;
     return;
   }
 
@@ -1643,6 +1716,7 @@ function renderSpendTable() {
           <td>${escapeHtml(spend.date)}</td>
           <td>${escapeHtml(spend.campaign)}</td>
           <td>${escapeHtml(spend.ad)}</td>
+          <td>${escapeHtml(spend.adId || "")}</td>
           <td>${money.format(Number(spend.spend || 0))}</td>
           <td>${spend.dailyBudget ? money.format(Number(spend.dailyBudget || 0)) : ""}</td>
           <td><button class="danger-button" data-delete="spend" data-id="${spend.id}" type="button">Eliminar</button></td>
@@ -1786,21 +1860,49 @@ async function handleSaleSubmit(event) {
     date: data.date || today(),
   };
 
+  applyManualAdAttribution(sale, data.adId);
+  await saveSale(sale, "Venta registrada");
+  form.reset();
+  form.elements.date.value = today();
+}
+
+function applyManualAdAttribution(sale, adIdInput) {
+  const adId = normalizeAdId(adIdInput);
+  const matchedAd = findAdById(adId);
+  sale.adId = adId;
+  sale.campaign = adId ? matchedAd?.campaign || sale.campaign || "" : "";
+  sale.adset = adId ? matchedAd?.adset || sale.adset || "" : "";
+  sale.ad = adId ? adName(matchedAd) || sale.ad || "" : "";
+  sale.attributionSource = adId ? "manual_ad_id" : "";
+  return sale;
+}
+
+async function saveSale(sale, message) {
   try {
     if (serverAvailable) {
       const remoteState = await api("/api/sales", { method: "POST", body: JSON.stringify(sale) });
       applyRemoteState(remoteState);
     } else {
-      state.sales.push(sale);
+      const index = state.sales.findIndex((item) => item.id === sale.id);
+      if (index >= 0) state.sales[index] = { ...state.sales[index], ...sale };
+      else state.sales.push(sale);
       saveState();
     }
-    form.reset();
-    form.elements.date.value = today();
     render();
-    toast("Venta registrada");
+    toast(message);
   } catch (error) {
     toast(error.message);
   }
+}
+
+async function editSaleAdId(saleId) {
+  const sale = state.sales.find((item) => item.id === saleId);
+  if (!sale) return;
+  const current = normalizeAdId(sale.adId);
+  const next = prompt("Pega el ID del anuncio que aparece en Business Suite. Déjalo vacío para quitarlo.", current);
+  if (next === null) return;
+  const updated = applyManualAdAttribution({ ...sale }, next);
+  await saveSale(updated, updated.adId ? "ID de anuncio guardado" : "ID de anuncio quitado");
 }
 
 function applyRemoteState(remoteState) {
@@ -1936,7 +2038,7 @@ function importCsv() {
 
 function normalizeImportedRow(type, row) {
   if (type === "sales") {
-    return {
+    const sale = {
       id: uid("sale"),
       phone: normalizePhone(row.phone),
       products: String(row.product || "")
@@ -1947,6 +2049,7 @@ function normalizeImportedRow(type, row) {
       amount: parseMoney(row.amount),
       date: row.date || today(),
     };
+    return applyManualAdAttribution(sale, row.adId || row.ad_id || row.metaAdId);
   }
   if (type === "leads") {
     return {
@@ -1990,6 +2093,10 @@ function seedDemoData() {
     product: "Imán, Llavero",
     amount: 2500,
     date: today(),
+    adId: "demo_ad_01",
+    ad: "Video testimonio 01",
+    campaign: "Mensajes Mayo",
+    attributionSource: "manual_ad_id",
   });
   state.spend.push({
     id: uid("spend"),
@@ -2023,6 +2130,12 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const editSaleButton = event.target.closest("[data-edit-sale-ad]");
+  if (editSaleButton) {
+    editSaleAdId(editSaleButton.dataset.editSaleAd);
+    return;
+  }
+
   const button = event.target.closest("[data-delete]");
   if (!button) return;
   const collection = button.dataset.delete;
@@ -2051,7 +2164,7 @@ document.getElementById("exportJson").addEventListener("click", () => {
 
 document.getElementById("exportSalesCsv").addEventListener("click", () => {
   const rows = state.sales.map((sale) => ({ ...sale, product: getSaleProducts(sale).join("|") }));
-  download(`ventas-${today()}.csv`, toCsv(rows, ["phone", "product", "amount", "date"]), "text/csv");
+  download(`ventas-${today()}.csv`, toCsv(rows, ["phone", "product", "amount", "date", "adId", "ad", "campaign"]), "text/csv");
 });
 
 document.getElementById("exportLeadsCsv").addEventListener("click", () => {
@@ -2125,6 +2238,7 @@ document.getElementById("fillSaleExample").addEventListener("click", () => {
   });
   form.elements.amount.value = "2500";
   form.elements.date.value = today();
+  form.elements.adId.value = state.ads?.[0]?.id || "";
 });
 
 document.getElementById("clearDemoData").addEventListener("click", () => {

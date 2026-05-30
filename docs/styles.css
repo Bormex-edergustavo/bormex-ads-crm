@@ -199,6 +199,12 @@ h2 {
   flex-wrap: wrap;
 }
 
+.table-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
 .primary-button,
 .secondary-button,
 .ghost-button,

@@ -652,6 +652,11 @@ function normalizeSale(body: any) {
     product: products.join(", "),
     amount: Number(body.amount || 0),
     date: String(body.date || new Date().toISOString().slice(0, 10)),
+    adId: normalizeAdId(body.adId || body.ad_id || body.metaAdId || ""),
+    ad: String(body.ad || ""),
+    adset: String(body.adset || ""),
+    campaign: String(body.campaign || ""),
+    attributionSource: String(body.attributionSource || ""),
   };
 }
 
@@ -723,6 +728,14 @@ function normalizePhone(value: unknown) {
   if (digits.length === 11 && digits.startsWith("1")) return `52${digits.slice(1)}`;
   if (digits.length >= 13 && digits.startsWith("521")) return `52${digits.slice(3)}`;
   return digits;
+}
+
+function normalizeAdId(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const numeric = text.match(/(?:ad[_\s-]?id|source[_\s-]?id)?\D*(\d{8,})/i);
+  if (numeric) return numeric[1];
+  return text.replace(/^ad[_\s-]?id[:\s-]*/i, "").trim();
 }
 
 function timestampToDate(value: unknown) {

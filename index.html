@@ -197,6 +197,11 @@
                 Fecha
                 <input name="date" type="date" required />
               </label>
+              <label class="full">
+                ID del anuncio
+                <input name="adId" list="adIdOptions" placeholder="Pega el ad_id de Business Suite" />
+                <datalist id="adIdOptions"></datalist>
+              </label>
               <div class="form-actions full">
                 <button class="primary-button" type="submit">Guardar venta</button>
                 <button class="secondary-button" id="fillSaleExample" type="button">Ejemplo</button>
@@ -220,6 +225,7 @@
                     <th>Número</th>
                     <th>Producto</th>
                     <th>Monto</th>
+                    <th>ID anuncio</th>
                     <th>Anuncio atribuido</th>
                     <th></th>
                   </tr>
@@ -306,6 +312,7 @@
                     <th>Fecha</th>
                     <th>Campaña</th>
                     <th>Anuncio</th>
+                    <th>ID anuncio</th>
                     <th>Gasto</th>
                     <th>Presupuesto</th>
                     <th></th>
@@ -342,7 +349,7 @@
                 <button class="primary-button" id="importCsv" type="button">Importar CSV</button>
               </div>
               <div class="hint">
-                Ventas: phone,product,amount,date<br />
+                Ventas: phone,product,amount,date,adId<br />
                 Leads: phone,campaign,adset,ad,adId,date,message<br />
                 Gasto: campaign,ad,adId,spend,dailyBudget,date
               </div>
