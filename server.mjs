@@ -37,6 +37,7 @@ const defaultDb = {
     minLeads: 8,
   },
   lastAdsSync: null,
+  lastAdsRange: null,
   lastWebhookAt: null,
 };
 
@@ -99,11 +100,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/sync/ads" && req.method === "POST") {
+      const body = await readJson(req);
       const db = await readDb();
-      const payload = await syncMetaAds();
+      const payload = await syncMetaAds(body);
       db.ads = payload.ads;
       db.spend = payload.spend;
       db.lastAdsSync = new Date().toISOString();
+      db.lastAdsRange = payload.range;
       await writeDb(db);
       return json(res, db);
     }
@@ -353,7 +356,7 @@ async function writeDb(db) {
   await writeFile(dbPath, JSON.stringify(db, null, 2));
 }
 
-async function syncMetaAds() {
+async function syncMetaAds(options = {}) {
   const token = metaAdsAccessToken();
   const rawAccountId = process.env.META_AD_ACCOUNT_ID;
   if (!token || !rawAccountId) {
@@ -361,7 +364,7 @@ async function syncMetaAds() {
   }
 
   const accountId = rawAccountId.startsWith("act_") ? rawAccountId : `act_${rawAccountId}`;
-  const today = todayInBusinessTimeZone();
+  const range = normalizeSyncRange(options);
   const fields = [
     "id",
     "name",
@@ -369,30 +372,49 @@ async function syncMetaAds() {
     "effective_status",
     "campaign{id,name,effective_status}",
     "adset{id,name,effective_status,daily_budget,lifetime_budget}",
-    `insights.time_range({'since':'${today}','until':'${today}'}){spend,impressions,clicks,actions,cost_per_action_type}`,
+    `insights.time_range({'since':'${range.since}','until':'${range.until}'}){spend,impressions,clicks,actions,cost_per_action_type}`,
   ].join(",");
 
   const url = new URL(`https://graph.facebook.com/${graphVersion()}/${accountId}/ads`);
   url.searchParams.set("fields", fields);
-  url.searchParams.set("effective_status", JSON.stringify(["ACTIVE"]));
   url.searchParams.set("limit", "100");
   url.searchParams.set("access_token", token);
 
   const ads = await fetchAllPages(url);
-  const normalizedAds = ads.map(normalizeMetaAd);
+  const normalizedAds = ads
+    .map((ad) => normalizeMetaAd(ad, range))
+    .filter((ad) => ad.effectiveStatus === "ACTIVE" || Number(ad.spend || 0) > 0 || Number(ad.messages || 0) > 0);
   const spend = normalizedAds.map((ad) => ({
-    id: `meta_spend_${ad.id}_${today}`,
+    id: `meta_spend_${ad.id}_${range.since}_${range.until}`,
     source: "meta",
     campaign: ad.campaign,
+    campaignId: ad.campaignId,
     adset: ad.adset,
+    adsetId: ad.adsetId,
     ad: ad.name,
     adId: ad.id,
     spend: ad.spend,
     dailyBudget: ad.dailyBudget,
-    date: today,
+    date: range.since === range.until ? range.since : `${range.since} - ${range.until}`,
+    rangeStart: range.since,
+    rangeEnd: range.until,
+    messages: ad.messages,
   }));
 
-  return { ads: normalizedAds, spend };
+  return { ads: normalizedAds, spend, range };
+}
+
+function normalizeSyncRange(options) {
+  const today = todayInBusinessTimeZone();
+  const since = validDate(options?.since || options?.startDate) || today;
+  const until = validDate(options?.until || options?.endDate) || since;
+  if (since > until) throw new Error("La fecha de inicio no puede ser mayor que la fecha fin");
+  return { since, until };
+}
+
+function validDate(value) {
+  const text = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
 }
 
 async function syncMetaAdsIntoDb() {
@@ -402,6 +424,7 @@ async function syncMetaAdsIntoDb() {
   db.ads = payload.ads;
   db.spend = payload.spend;
   db.lastAdsSync = new Date().toISOString();
+  db.lastAdsRange = payload.range;
   await writeDb(db);
   return db;
 }
@@ -421,7 +444,7 @@ async function fetchAllPages(firstUrl) {
   return rows;
 }
 
-function normalizeMetaAd(ad) {
+function normalizeMetaAd(ad, range) {
   const insights = ad.insights?.data?.[0] || {};
   const actions = insights.actions || [];
   const messages = pickActionValue(actions, [
@@ -443,6 +466,8 @@ function normalizeMetaAd(ad) {
     impressions: Number(insights.impressions || 0),
     clicks: Number(insights.clicks || 0),
     messages,
+    rangeStart: range.since,
+    rangeEnd: range.until,
     metaLeads: pickActionValue(actions, ["onsite_conversion.lead_grouped", "onsite_conversion.lead", "lead"]),
   };
 }

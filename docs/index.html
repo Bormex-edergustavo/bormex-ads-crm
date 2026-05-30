@@ -48,6 +48,32 @@
         </header>
 
         <section class="view active" id="dashboardView">
+          <section class="panel range-panel">
+            <div class="panel-header">
+              <div>
+                <h2>Rango del panel</h2>
+                <p>El gasto, mensajes, ventas y ROAS se recalculan con estas fechas.</p>
+              </div>
+            </div>
+            <form class="range-form" id="dashboardRangeForm">
+              <label>
+                Desde
+                <input name="startDate" type="date" required />
+              </label>
+              <label>
+                Hasta
+                <input name="endDate" type="date" required />
+              </label>
+              <div class="range-actions">
+                <button class="primary-button" type="submit">Actualizar rango</button>
+                <button class="secondary-button" data-range-preset="today" type="button">Hoy</button>
+                <button class="secondary-button" data-range-preset="7d" type="button">7 días</button>
+                <button class="secondary-button" data-range-preset="30d" type="button">30 días</button>
+                <button class="secondary-button" data-range-preset="month" type="button">Este mes</button>
+              </div>
+            </form>
+          </section>
+
           <div class="metric-grid">
             <article class="metric">
               <span>Gasto</span>
@@ -121,30 +147,6 @@
               <div class="activity-list" id="recentSales"></div>
             </section>
           </div>
-
-          <section class="panel">
-            <div class="panel-header">
-              <div>
-                <h2>Fechas de campañas</h2>
-                <p>Las ventas solo cuentan para una campaña cuando caen dentro de su fecha de inicio y fin.</p>
-              </div>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Campaña</th>
-                    <th>Inicio</th>
-                    <th>Fin</th>
-                    <th>Ventas del rango</th>
-                    <th>Ingresos del rango</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody id="campaignPeriodsTable"></tbody>
-              </table>
-            </div>
-          </section>
         </section>
 
         <section class="view" id="crmView">

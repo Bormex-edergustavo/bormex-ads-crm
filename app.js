@@ -14,6 +14,10 @@ const defaultState = {
   spend: [],
   ads: [],
   campaignPeriods: [],
+  filters: {
+    startDate: "",
+    endDate: "",
+  },
   rules: {
     targetCpa: 600,
     minRoas: 2,
@@ -45,6 +49,12 @@ function roleFromCode(code) {
 
 function isSalesRole() {
   return accessRole === "sales";
+}
+
+function addDays(dateValue, days) {
+  const date = new Date(`${dateValue}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 function uid(prefix) {
@@ -182,7 +192,10 @@ function renderConnectionStatus(config, remoteState) {
 
   if (config.metaAdsConfigured) {
     dots[1].classList.add("connected");
-    adsText.textContent = `Meta Ads configurado. Última sincronización: ${remoteState.lastAdsSync || "todavía ninguna"}. Auto-sync cada ${config.adsSyncIntervalMinutes || 15} minutos.`;
+    const rangeText = remoteState.lastAdsRange
+      ? ` Rango: ${remoteState.lastAdsRange.since} a ${remoteState.lastAdsRange.until}.`
+      : "";
+    adsText.textContent = `Meta Ads configurado. Última sincronización: ${remoteState.lastAdsSync || "todavía ninguna"}.${rangeText} Auto-sync cada ${config.adsSyncIntervalMinutes || 15} minutos.`;
   } else {
     adsText.textContent = "Faltan META_ACCESS_TOKEN y META_AD_ACCOUNT_ID en .env para leer anuncios activos.";
   }
@@ -190,21 +203,38 @@ function renderConnectionStatus(config, remoteState) {
 
 async function syncAdsFromMeta() {
   const button = document.getElementById("syncAds");
-  button.disabled = true;
-  button.textContent = "Sincronizando...";
+  const rangeButton = document.querySelector("#dashboardRangeForm .primary-button");
+  const range = getSelectedRange();
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Sincronizando...";
+  }
+  if (rangeButton) {
+    rangeButton.disabled = true;
+    rangeButton.textContent = "Actualizando...";
+  }
   try {
-    const remoteState = await api("/api/sync/ads", { method: "POST", body: "{}" });
+    const remoteState = await api("/api/sync/ads", {
+      method: "POST",
+      body: JSON.stringify({ since: range.startDate, until: range.endDate }),
+    });
     state.spend = remoteState.spend || [];
     state.ads = remoteState.ads || [];
     saveState();
     render();
     await syncFromServer();
-    toast("Anuncios activos sincronizados");
+    toast(`Panel actualizado del ${range.startDate} al ${range.endDate}`);
   } catch (error) {
     toast(error.message);
   } finally {
-    button.textContent = "Sincronizar anuncios activos";
-    button.disabled = false;
+    if (button) {
+      button.textContent = "Sincronizar anuncios activos";
+      button.disabled = false;
+    }
+    if (rangeButton) {
+      rangeButton.textContent = "Actualizar rango";
+      rangeButton.disabled = false;
+    }
   }
 }
 
@@ -259,48 +289,48 @@ function adName(record) {
   return record?.name || record?.ad || "";
 }
 
-function campaignKey(record) {
-  const campaignId = String(record?.campaignId || "").trim();
-  if (campaignId) return `campaign:${campaignId}`;
-  const campaign = String(record?.campaign || "Sin campaña").trim() || "Sin campaña";
-  return `campaign-name:${campaign.toLowerCase()}`;
+function ensureDateFilters() {
+  state.filters = state.filters || {};
+  state.filters.startDate = state.filters.startDate || today();
+  state.filters.endDate = state.filters.endDate || state.filters.startDate;
 }
 
-function normalizeCampaignPeriod(period) {
-  const campaign = String(period.campaign || "Sin campaña").trim() || "Sin campaña";
-  const campaignId = String(period.campaignId || "").trim();
-  const id = String(period.id || period.key || campaignKey({ campaignId, campaign }));
+function getSelectedRange() {
+  ensureDateFilters();
   return {
-    id,
-    campaignId,
-    campaign,
-    startDate: String(period.startDate || period.start || ""),
-    endDate: String(period.endDate || period.end || ""),
+    startDate: state.filters.startDate,
+    endDate: state.filters.endDate,
   };
 }
 
-function getCampaignPeriod(key) {
-  return (state.campaignPeriods || []).find((period) => period.id === key) || null;
+function setSelectedRange(startDate, endDate) {
+  if (!startDate || !endDate) throw new Error("Selecciona fecha de inicio y fecha fin");
+  if (startDate > endDate) throw new Error("La fecha de inicio no puede ser mayor que la fecha fin");
+  state.filters = { ...(state.filters || {}), startDate, endDate };
+  saveState();
 }
 
-function getAttributionCampaignKey(attribution) {
-  return campaignKey({
-    campaignId: attribution?.campaignId || "",
-    campaign: attribution?.campaign || "Sin campaña",
-  });
-}
-
-function isDateInsidePeriod(dateValue, period) {
-  if (!period) return true;
+function isDateInSelectedRange(dateValue) {
   const date = String(dateValue || "");
-  if (period.startDate && date < period.startDate) return false;
-  if (period.endDate && date > period.endDate) return false;
-  return true;
+  if (!date) return false;
+  const { startDate, endDate } = getSelectedRange();
+  return date >= startDate && date <= endDate;
 }
 
-function saleMatchesCampaignPeriod(sale, attribution) {
-  const key = getAttributionCampaignKey(attribution);
-  return isDateInsidePeriod(sale.date, getCampaignPeriod(key));
+function rangesOverlap(startDate, endDate) {
+  const selected = getSelectedRange();
+  const start = startDate || endDate || selected.startDate;
+  const end = endDate || startDate || selected.endDate;
+  return start <= selected.endDate && end >= selected.startDate;
+}
+
+function spendMatchesSelectedRange(spend) {
+  if (spend.rangeStart || spend.rangeEnd) return rangesOverlap(spend.rangeStart, spend.rangeEnd);
+  return isDateInSelectedRange(spend.date);
+}
+
+function getFilteredSales() {
+  return (state.sales || []).filter((sale) => isDateInSelectedRange(sale.date));
 }
 
 function getSaleAttribution(sale) {
@@ -350,7 +380,7 @@ function getPerformance() {
     });
   }
 
-  for (const lead of state.leads) {
+  for (const lead of (state.leads || []).filter((item) => isDateInSelectedRange(item.date))) {
     const key = adKey(lead);
     if (!map.has(key)) {
       map.set(key, {
@@ -373,7 +403,7 @@ function getPerformance() {
     row.messages = Math.max(Number(row.messages || 0), row.trackedLeads);
   }
 
-  for (const spend of state.spend) {
+  for (const spend of (state.spend || []).filter(spendMatchesSelectedRange)) {
     const key = adKey(spend);
     if (!map.has(key)) {
       map.set(key, {
@@ -397,10 +427,9 @@ function getPerformance() {
     row.dailyBudget = Math.max(row.dailyBudget, Number(spend.dailyBudget || 0));
   }
 
-  for (const sale of state.sales) {
+  for (const sale of getFilteredSales()) {
     const attribution = getSaleAttribution(sale);
     if (!attribution) continue;
-    if (!saleMatchesCampaignPeriod(sale, attribution)) continue;
     const key = adKey(attribution);
     if (!map.has(key)) {
       map.set(key, {
@@ -457,6 +486,7 @@ function recommendationLabel(value) {
 
 function render() {
   applyRoleAccess();
+  renderRangeForm();
   renderMetrics();
   renderCrm();
   renderAdIdOptions();
@@ -465,9 +495,16 @@ function render() {
   renderSalesTable();
   renderLeadsTable();
   renderSpendTable();
-  renderCampaignPeriods();
   fillRules();
   applyRoleAccess();
+}
+
+function renderRangeForm() {
+  const form = document.getElementById("dashboardRangeForm");
+  if (!form) return;
+  const range = getSelectedRange();
+  if (document.activeElement !== form.elements.startDate) form.elements.startDate.value = range.startDate;
+  if (document.activeElement !== form.elements.endDate) form.elements.endDate.value = range.endDate;
 }
 
 function renderAdIdOptions() {
@@ -535,9 +572,9 @@ function renderPerformance() {
 
 function renderRecentSales() {
   const container = document.getElementById("recentSales");
-  const rows = [...state.sales].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
+  const rows = [...getFilteredSales()].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
   if (!rows.length) {
-    container.innerHTML = `<div class="empty">Aquí aparecerán las ventas recientes.</div>`;
+    container.innerHTML = `<div class="empty">No hay ventas registradas en este rango.</div>`;
     return;
   }
 
@@ -632,74 +669,6 @@ function renderSpendTable() {
         </tr>
       `,
     )
-    .join("");
-}
-
-function collectCampaignRows() {
-  const rows = new Map();
-  const nameToKey = new Map();
-  const upsert = (record) => {
-    if (!record) return;
-    const campaign = String(record.campaign || "Sin campaña").trim() || "Sin campaña";
-    const campaignId = String(record.campaignId || "").trim();
-    const nameKey = campaign.toLowerCase();
-    const key = campaignId ? campaignKey({ campaignId, campaign }) : nameToKey.get(nameKey) || campaignKey({ campaignId, campaign });
-    if (campaignId) nameToKey.set(nameKey, key);
-    const period = getCampaignPeriod(key);
-    const current = rows.get(key) || {};
-    rows.set(key, {
-      ...current,
-      key,
-      campaignId: campaignId || current.campaignId || period?.campaignId || "",
-      campaign: campaign !== "Sin campaña" ? campaign : current.campaign || period?.campaign || campaign,
-      startDate: period?.startDate || "",
-      endDate: period?.endDate || "",
-    });
-  };
-
-  (state.ads || []).forEach(upsert);
-  (state.spend || []).forEach(upsert);
-  for (const sale of state.sales || []) upsert(getSaleAttribution(sale));
-  for (const period of state.campaignPeriods || []) upsert(period);
-  return [...rows.values()].sort((a, b) => a.campaign.localeCompare(b.campaign, "es"));
-}
-
-function getCampaignPeriodStats(row) {
-  const stats = { sales: 0, revenue: 0 };
-  for (const sale of state.sales || []) {
-    const attribution = getSaleAttribution(sale);
-    if (!attribution) continue;
-    if (getAttributionCampaignKey(attribution) !== row.key) continue;
-    if (!isDateInsidePeriod(sale.date, getCampaignPeriod(row.key))) continue;
-    stats.sales += 1;
-    stats.revenue += Number(sale.amount || 0);
-  }
-  return stats;
-}
-
-function renderCampaignPeriods() {
-  const tbody = document.getElementById("campaignPeriodsTable");
-  if (!tbody) return;
-  const rows = collectCampaignRows();
-  if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">Cuando haya campañas sincronizadas aparecerán aquí.</td></tr>`;
-    return;
-  }
-
-  tbody.innerHTML = rows
-    .map((row) => {
-      const stats = getCampaignPeriodStats(row);
-      return `
-        <tr>
-          <td>${escapeHtml(row.campaign)}</td>
-          <td><input type="date" value="${escapeHtml(row.startDate || "")}" data-campaign-date="${escapeHtml(row.key)}" data-field="startDate" /></td>
-          <td><input type="date" value="${escapeHtml(row.endDate || "")}" data-campaign-date="${escapeHtml(row.key)}" data-field="endDate" /></td>
-          <td>${stats.sales}</td>
-          <td>${money.format(stats.revenue)}</td>
-          <td><button class="secondary-button compact" data-save-campaign-period="${escapeHtml(row.key)}" type="button">Guardar</button></td>
-        </tr>
-      `;
-    })
     .join("");
 }
 
@@ -909,44 +878,6 @@ function applyRemoteState(remoteState) {
   state.campaignPeriods = remoteState.campaignPeriods || state.campaignPeriods;
   state.rules = remoteState.rules || state.rules;
   saveState();
-}
-
-async function saveCampaignPeriod(key) {
-  const row = collectCampaignRows().find((item) => item.key === key);
-  if (!row) return;
-  const inputs = [...document.querySelectorAll("[data-campaign-date]")].filter((input) => input.dataset.campaignDate === key);
-  const startDate = inputs.find((input) => input.dataset.field === "startDate")?.value || "";
-  const endDate = inputs.find((input) => input.dataset.field === "endDate")?.value || "";
-  if (startDate && endDate && startDate > endDate) {
-    toast("La fecha de inicio no puede ser mayor que la fecha fin");
-    return;
-  }
-  const period = normalizeCampaignPeriod({
-    id: key,
-    campaignId: row.campaignId,
-    campaign: row.campaign,
-    startDate,
-    endDate,
-  });
-  const next = [...(state.campaignPeriods || []).filter((item) => item.id !== key), period].filter(
-    (item) => item.startDate || item.endDate,
-  );
-  try {
-    if (serverAvailable) {
-      const remoteState = await api("/api/campaign-periods", {
-        method: "POST",
-        body: JSON.stringify({ periods: next }),
-      });
-      applyRemoteState(remoteState);
-    } else {
-      state.campaignPeriods = next;
-      saveState();
-    }
-    render();
-    toast("Fechas de campaña guardadas");
-  } catch (error) {
-    toast(error.message);
-  }
 }
 
 function persistAndRender(message) {
@@ -1169,12 +1100,6 @@ document.addEventListener("click", (event) => {
     return;
   }
 
-  const saveCampaignButton = event.target.closest("[data-save-campaign-period]");
-  if (saveCampaignButton) {
-    saveCampaignPeriod(saveCampaignButton.dataset.saveCampaignPeriod);
-    return;
-  }
-
   const button = event.target.closest("[data-delete]");
   if (!button) return;
   const collection = button.dataset.delete;
@@ -1218,6 +1143,40 @@ document.getElementById("importCsv").addEventListener("click", importCsv);
 document.getElementById("crmChannelFilter").addEventListener("change", () => {
   activeConversationId = "";
   renderCrm();
+});
+
+document.getElementById("dashboardRangeForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.currentTarget));
+  try {
+    setSelectedRange(data.startDate, data.endDate);
+    render();
+    await syncAdsFromMeta();
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
+document.querySelectorAll("[data-range-preset]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const now = today();
+    const preset = button.dataset.rangePreset;
+    const startDate =
+      preset === "7d"
+        ? addDays(now, -6)
+        : preset === "30d"
+          ? addDays(now, -29)
+          : preset === "month"
+            ? `${now.slice(0, 8)}01`
+            : now;
+    try {
+      setSelectedRange(startDate, now);
+      render();
+      await syncAdsFromMeta();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
 });
 
 document.getElementById("replyForm").addEventListener("submit", async (event) => {
@@ -1296,6 +1255,7 @@ document.getElementById("logoutPanel").addEventListener("click", () => {
 });
 
 document.getElementById("saleForm").elements.date.value = today();
+ensureDateFilters();
 
 render();
 saveState();

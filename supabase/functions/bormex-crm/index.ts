@@ -15,6 +15,7 @@ const defaultDb = {
   },
   webhookEvents: [],
   lastAdsSync: null,
+  lastAdsRange: null,
   lastWebhookAt: null,
 };
 
@@ -75,10 +76,11 @@ Deno.serve(async (req) => {
     }
 
     if (pathname === "/api/sync/ads" && req.method === "POST") {
-      const payload = await syncMetaAds();
+      const payload = await syncMetaAds(await readJson(req));
       await replaceCollection("ads", payload.ads);
       await replaceCollection("spend", payload.spend);
       await setSetting("lastAdsSync", new Date().toISOString());
+      await setSetting("lastAdsRange", payload.range);
       return json(await readDb());
     }
 
@@ -87,10 +89,11 @@ Deno.serve(async (req) => {
       if (!Deno.env.get("CRON_SECRET") || secret !== Deno.env.get("CRON_SECRET")) {
         return text("Forbidden", 403);
       }
-      const payload = await syncMetaAds();
+      const payload = await syncMetaAds({});
       await replaceCollection("ads", payload.ads);
       await replaceCollection("spend", payload.spend);
       await setSetting("lastAdsSync", new Date().toISOString());
+      await setSetting("lastAdsRange", payload.range);
       return json({ ok: true, ads: payload.ads.length });
     }
 
@@ -259,6 +262,7 @@ async function readDb() {
     campaignPeriods: settings.campaignPeriods || [],
     webhookEvents: settings.webhookEvents || [],
     lastAdsSync: settings.lastAdsSync || null,
+    lastAdsRange: settings.lastAdsRange || null,
     lastWebhookAt: settings.lastWebhookAt || null,
   };
 }
@@ -328,7 +332,7 @@ function readFirstSecretKey() {
   return String(values[0] || "");
 }
 
-async function syncMetaAds() {
+async function syncMetaAds(options: any = {}) {
   const token = metaAdsAccessToken();
   const rawAccountId = Deno.env.get("META_AD_ACCOUNT_ID");
   if (!token || !rawAccountId) {
@@ -336,7 +340,7 @@ async function syncMetaAds() {
   }
 
   const accountId = rawAccountId.startsWith("act_") ? rawAccountId : `act_${rawAccountId}`;
-  const today = todayInBusinessTimeZone();
+  const range = normalizeSyncRange(options);
   const fields = [
     "id",
     "name",
@@ -344,30 +348,49 @@ async function syncMetaAds() {
     "effective_status",
     "campaign{id,name,effective_status}",
     "adset{id,name,effective_status,daily_budget,lifetime_budget}",
-    `insights.time_range({'since':'${today}','until':'${today}'}){spend,impressions,clicks,actions,cost_per_action_type}`,
+    `insights.time_range({'since':'${range.since}','until':'${range.until}'}){spend,impressions,clicks,actions,cost_per_action_type}`,
   ].join(",");
 
   const url = new URL(`https://graph.facebook.com/${graphVersion()}/${accountId}/ads`);
   url.searchParams.set("fields", fields);
-  url.searchParams.set("effective_status", JSON.stringify(["ACTIVE"]));
   url.searchParams.set("limit", "100");
   url.searchParams.set("access_token", token);
 
   const ads = await fetchAllPages(url);
-  const normalizedAds = ads.map(normalizeMetaAd);
+  const normalizedAds = ads
+    .map((ad: any) => normalizeMetaAd(ad, range))
+    .filter((ad: Record<string, unknown>) => ad.effectiveStatus === "ACTIVE" || Number(ad.spend || 0) > 0 || Number(ad.messages || 0) > 0);
   const spend = normalizedAds.map((ad: Record<string, unknown>) => ({
-    id: `meta_spend_${ad.id}_${today}`,
+    id: `meta_spend_${ad.id}_${range.since}_${range.until}`,
     source: "meta",
     campaign: ad.campaign,
+    campaignId: ad.campaignId,
     adset: ad.adset,
+    adsetId: ad.adsetId,
     ad: ad.name,
     adId: ad.id,
     spend: ad.spend,
     dailyBudget: ad.dailyBudget,
-    date: today,
+    date: range.since === range.until ? range.since : `${range.since} - ${range.until}`,
+    rangeStart: range.since,
+    rangeEnd: range.until,
+    messages: ad.messages,
   }));
 
-  return { ads: normalizedAds, spend };
+  return { ads: normalizedAds, spend, range };
+}
+
+function normalizeSyncRange(options: any) {
+  const today = todayInBusinessTimeZone();
+  const since = validDate(options?.since || options?.startDate) || today;
+  const until = validDate(options?.until || options?.endDate) || since;
+  if (since > until) throw new Error("La fecha de inicio no puede ser mayor que la fecha fin");
+  return { since, until };
+}
+
+function validDate(value: unknown) {
+  const text = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
 }
 
 async function fetchAllPages(firstUrl: URL) {
@@ -383,7 +406,7 @@ async function fetchAllPages(firstUrl: URL) {
   return rows;
 }
 
-function normalizeMetaAd(ad: any) {
+function normalizeMetaAd(ad: any, range: { since: string; until: string }) {
   const insights = ad.insights?.data?.[0] || {};
   const actions = insights.actions || [];
   const messages = pickActionValue(actions, [
@@ -405,6 +428,8 @@ function normalizeMetaAd(ad: any) {
     impressions: Number(insights.impressions || 0),
     clicks: Number(insights.clicks || 0),
     messages,
+    rangeStart: range.since,
+    rangeEnd: range.until,
     metaLeads: pickActionValue(actions, ["onsite_conversion.lead_grouped", "onsite_conversion.lead", "lead"]),
   };
 }
