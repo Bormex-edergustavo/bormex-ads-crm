@@ -8,10 +8,11 @@ const apiBase =
   process.env.BORMEX_API_BASE ||
   "https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm";
 
-const [html, css, js] = await Promise.all([
+const [html, css, js, privacy] = await Promise.all([
   readFile(join(root, "index.html"), "utf8"),
   readFile(join(root, "styles.css"), "utf8"),
   readFile(join(root, "app.js"), "utf8"),
+  readFile(join(root, "privacy.html"), "utf8"),
 ]);
 
 const configuredHtml = html.replace(
@@ -25,6 +26,7 @@ await Promise.all([
   writeFile(join(outDir, "index.html"), configuredHtml),
   writeFile(join(outDir, "styles.css"), css),
   writeFile(join(outDir, "app.js"), js),
+  writeFile(join(outDir, "privacy.html"), privacy),
 ]);
 
 console.log(`Static frontend built in dist/ with API ${apiBase}`);

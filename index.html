@@ -4,31 +4,31 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
-    <title>Ventas por anuncio</title>
+    <title>Bormex Ads CRM</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
-          <span class="brand-mark">VA</span>
+          <span class="brand-mark">BX</span>
           <div>
-            <strong>Ventas Ads</strong>
-            <span>WhatsApp + Meta</span>
+            <strong>Bormex CRM</strong>
+            <span>Ads + WhatsApp</span>
           </div>
         </div>
 
         <nav class="nav" aria-label="Secciones">
-          <button class="nav-item active" data-view="dashboard">Panel</button>
-          <button class="nav-item" data-view="crm">CRM</button>
-          <button class="nav-item" data-view="sales">Ventas</button>
-          <button class="nav-item" data-view="leads">Leads</button>
-          <button class="nav-item" data-view="ads">Anuncios</button>
-          <button class="nav-item" data-view="settings">Datos</button>
+          <button class="nav-item active" data-view="dashboard" type="button"><i data-lucide="layout-dashboard"></i><span>Panel</span></button>
+          <button class="nav-item" data-view="crm" type="button"><i data-lucide="messages-square"></i><span>CRM</span></button>
+          <button class="nav-item" data-view="sales" type="button"><i data-lucide="receipt-text"></i><span>Ventas</span></button>
+          <button class="nav-item" data-view="leads" type="button"><i data-lucide="user-round-check"></i><span>Leads</span></button>
+          <button class="nav-item" data-view="ads" type="button"><i data-lucide="megaphone"></i><span>Anuncios</span></button>
+          <button class="nav-item" data-view="settings" type="button"><i data-lucide="sliders-horizontal"></i><span>Datos</span></button>
         </nav>
 
         <div class="sidebar-footer">
-          <span id="storageStatus">Guardado local</span>
+          <span class="sync-chip"><i data-lucide="database"></i><span id="storageStatus">Guardado local</span></span>
           <button class="ghost-button" id="clearDemoData" type="button">Reiniciar datos</button>
         </div>
       </aside>
@@ -43,7 +43,7 @@
             <span class="role-badge" id="roleBadge">Ads</span>
             <button class="secondary-button" id="exportJson" type="button">Exportar JSON</button>
             <button class="secondary-button" id="logoutPanel" type="button">Salir</button>
-            <button class="primary-button" data-open-sale type="button">Registrar venta</button>
+            <button class="primary-button" data-open-sale type="button"><i data-lucide="plus"></i><span>Registrar venta</span></button>
           </div>
         </header>
 
@@ -413,6 +413,10 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
     <script src="app.js"></script>
+    <script>
+      window.lucide?.createIcons();
+    </script>
   </body>
 </html>
