@@ -12,8 +12,8 @@ const [html, css, js] = await Promise.all([
 ]);
 
 const bundled = html
-  .replace(/<link rel="stylesheet" href="styles\.css"\s*\/?>/, `<style>\n${css}\n</style>`)
-  .replace(/<script src="app\.js"><\/script>/, `<script>\n${js}\n</script>`);
+  .replace(/<link rel="stylesheet" href="styles\.css(?:\?[^"]*)?"\s*\/?>/, `<style>\n${css}\n</style>`)
+  .replace(/<script src="app\.js(?:\?[^"]*)?"><\/script>/, `<script>\n${js}\n</script>`);
 
 await mkdir(fnDir, { recursive: true });
 await writeFile(join(fnDir, "index.static.html"), bundled);

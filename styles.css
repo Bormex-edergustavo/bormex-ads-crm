@@ -201,6 +201,7 @@ svg {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
   min-height: 44px;
   border: 1px solid transparent;
   border-radius: var(--radius);
@@ -218,9 +219,16 @@ svg {
 }
 
 .nav-item svg {
+  flex: 0 0 18px;
   width: 18px;
   height: 18px;
   stroke-width: 2.2;
+}
+
+.nav-item span {
+  display: block;
+  min-width: 0;
+  line-height: 1;
 }
 
 .nav-item:hover {
