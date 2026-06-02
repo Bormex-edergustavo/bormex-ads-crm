@@ -107,6 +107,10 @@ Deno.serve(async (req) => {
       return json(await readDb());
     }
 
+    if (pathname === "/api/media/whatsapp" && req.method === "POST") {
+      return json(await uploadWhatsAppMedia(await req.formData()));
+    }
+
     if (pathname.startsWith("/api/conversations/") && req.method === "POST") {
       await updateConversation(decodeURIComponent(pathname.replace("/api/conversations/", "")), await readJson(req));
       return json(filterStateForRole(await readDb(), accessRole));
@@ -724,7 +728,7 @@ async function sendCrmMessage(body: any) {
       text: textBody,
       at: now,
       status: "sent",
-      attachments: media.url ? [media] : [],
+      attachments: media.url || media.id ? [media] : [],
     },
   };
 }
@@ -743,11 +747,13 @@ function channelSenderId(channel: string) {
 
 function normalizeOutgoingMedia(body: any) {
   const url = String(body.mediaUrl || body.media?.url || "").trim();
+  const id = String(body.mediaId || body.media?.id || "").trim();
   const rawType = String(body.mediaType || body.media?.type || "").trim().toLowerCase();
   const type = ["image", "video", "audio", "document"].includes(rawType) ? rawType : inferMediaType(url);
   return {
     type,
     url,
+    id,
     filename: String(body.mediaFilename || body.media?.filename || "").trim(),
   };
 }
@@ -763,20 +769,20 @@ async function sendWhatsAppText(to: string, textBody: string) {
   return await sendWhatsAppMessage(to, textBody, { type: "", url: "", filename: "" });
 }
 
-async function sendWhatsAppMessage(to: string, textBody: string, media: { type: string; url: string; filename?: string }) {
+async function sendWhatsAppMessage(to: string, textBody: string, media: { type: string; url: string; id?: string; filename?: string }) {
   const token = whatsappSendAccessToken();
   const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
   if (!token || !phoneNumberId) {
     throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_ACCESS_TOKEN/META_ACCESS_TOKEN");
   }
-  const body = media.url
+  const body = media.url || media.id
     ? {
         messaging_product: "whatsapp",
         recipient_type: "individual",
         to,
         type: media.type,
         [media.type]: {
-          link: media.url,
+          ...(media.id ? { id: media.id } : { link: media.url }),
           ...(media.filename && media.type === "document" ? { filename: media.filename } : {}),
           ...(textBody && ["image", "video", "document"].includes(media.type) ? { caption: textBody } : {}),
         },
@@ -796,6 +802,38 @@ async function sendWhatsAppMessage(to: string, textBody: string, media: { type: 
   const payload = await response.json();
   if (!response.ok) throw new Error(formatWhatsAppSendError(payload));
   return payload.messages?.[0]?.id || crypto.randomUUID();
+}
+
+async function uploadWhatsAppMedia(formData: FormData) {
+  const token = whatsappSendAccessToken();
+  const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
+  if (!token || !phoneNumberId) {
+    throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_SEND_ACCESS_TOKEN/WHATSAPP_COEX_ACCESS_TOKEN");
+  }
+  const file = formData.get("file");
+  if (!(file instanceof File)) throw new HttpError(400, "Selecciona un archivo valido");
+  const requestedType = String(formData.get("mediaType") || "").toLowerCase();
+  const mediaType = ["image", "video", "audio", "document"].includes(requestedType) ? requestedType : inferMediaType(file.name || file.type || "");
+
+  const graphForm = new FormData();
+  graphForm.append("messaging_product", "whatsapp");
+  graphForm.append("file", file, file.name || "archivo");
+
+  const response = await fetch(`https://graph.facebook.com/${graphVersion()}/${phoneNumberId}/media`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: graphForm,
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(formatWhatsAppSendError(payload));
+  return {
+    ok: true,
+    mediaId: String(payload.id || ""),
+    type: mediaType,
+    filename: file.name || "",
+    mimeType: file.type || "",
+    size: file.size || 0,
+  };
 }
 
 function formatWhatsAppSendError(payload: any) {

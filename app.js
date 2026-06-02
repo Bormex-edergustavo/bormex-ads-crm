@@ -111,6 +111,32 @@ async function api(path, options = {}) {
   return payload;
 }
 
+async function apiForm(path, formData) {
+  const headers = {};
+  if (panelCode) {
+    headers.Authorization = `Basic ${btoa(`panel:${panelCode}`)}`;
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers,
+    body: formData,
+  });
+  const contentType = response.headers.get("content-type") || "";
+  const payload = contentType.includes("application/json")
+    ? await response.json()
+    : { error: await response.text() };
+  if (response.status === 401) {
+    panelCode = "";
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    showAuthGate();
+    throw new Error("Ingresa el código del panel");
+  }
+  if (!response.ok) throw new Error(payload.error || "No se pudo conectar");
+  hideAuthGate();
+  return payload;
+}
+
 function getApiBase() {
   const configured = document.querySelector('meta[name="bormex-api-base"]')?.content?.trim() || window.BORMEX_API_BASE || "";
   if (configured) return configured.replace(/\/$/, "");
@@ -1065,6 +1091,17 @@ function renderCrm() {
   }
 }
 
+function focusReplyComposer() {
+  requestAnimationFrame(() => {
+    const form = document.getElementById("replyForm");
+    if (!form || form.classList.contains("disabled")) return;
+    if (window.matchMedia("(max-width: 1080px)").matches) {
+      form.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    form.elements.text?.focus({ preventScroll: true });
+  });
+}
+
 function renderMessageAttachments(attachments = []) {
   if (!attachments?.length) return "";
   return `
@@ -1303,14 +1340,17 @@ function openWhatsAppDraft() {
     return;
   }
   const text = form.elements.text.value.trim();
-  const mediaUrl = form.elements.mediaUrl.value.trim();
-  const draft = [text, mediaUrl].filter(Boolean).join("\n");
-  if (!draft) {
-    toast("Escribe un mensaje o URL primero");
+  const mediaFile = form.elements.mediaFile.files?.[0] || null;
+  if (!text && !mediaFile) {
+    toast("Escribe un mensaje o selecciona un archivo");
     return;
   }
   const phone = normalizePhone(conversation.phone);
-  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(draft)}`, "_blank", "noopener,noreferrer");
+  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text || "")}`, "_blank", "noopener,noreferrer");
+  if (mediaFile) {
+    toast("Se abrió WhatsApp. Adjunta el archivo manualmente en la ventana.");
+    return;
+  }
   toast("Se abrió WhatsApp con el texto listo");
 }
 
@@ -1547,6 +1587,7 @@ document.addEventListener("click", (event) => {
   if (conversationButton) {
     activeConversationId = conversationButton.dataset.conversationId;
     renderCrm();
+    focusReplyComposer();
     return;
   }
 
@@ -1676,10 +1717,21 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
   const conversation = (state.conversations || []).find((item) => item.id === activeConversationId);
   const form = event.currentTarget;
   const text = form.elements.text.value.trim();
-  const mediaUrl = form.elements.mediaUrl.value.trim();
+  const mediaFile = form.elements.mediaFile.files?.[0] || null;
   const mediaType = form.elements.mediaType.value;
-  if (!conversation || (!text && !mediaUrl)) return;
+  if (!conversation || (!text && !mediaFile)) return;
   try {
+    let uploadedMedia = null;
+    if (mediaFile) {
+      if (conversation.channel !== "whatsapp") {
+        toast("Los archivos desde dispositivo por ahora solo estan listos para WhatsApp");
+        return;
+      }
+      const uploadForm = new FormData();
+      uploadForm.append("file", mediaFile);
+      uploadForm.append("mediaType", mediaType);
+      uploadedMedia = await apiForm("/api/media/whatsapp", uploadForm);
+    }
     const remoteState = await api("/api/messages", {
       method: "POST",
       body: JSON.stringify({
@@ -1691,14 +1743,15 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
         name: conversation.name,
         customName: conversation.customName || "",
         text,
-        mediaUrl,
         mediaType,
+        mediaId: uploadedMedia?.mediaId || "",
+        mediaFilename: uploadedMedia?.filename || mediaFile?.name || "",
       }),
     });
     form.reset();
     applyRemoteState(remoteState);
     render();
-    toast(mediaUrl ? "Mensaje con adjunto enviado" : "Mensaje enviado");
+    toast(mediaFile ? "Mensaje con archivo enviado" : "Mensaje enviado");
   } catch (error) {
     if (isWhatsAppPermissionError(error)) {
       toast("Meta no permite enviar con el token actual. Usa Abrir WhatsApp o configura el token COEX de envio.");

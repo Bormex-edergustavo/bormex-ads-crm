@@ -942,7 +942,8 @@ textarea:focus {
   display: grid;
   grid-template-columns: minmax(300px, 0.36fr) minmax(0, 1fr);
   gap: 18px;
-  min-height: calc(100vh - 150px);
+  height: calc(100vh - 150px);
+  min-height: 640px;
 }
 
 .crm-list-panel,
@@ -1088,11 +1089,17 @@ textarea:focus {
 
 .crm-thread-panel {
   display: grid;
-  grid-template-rows: auto minmax(280px, 1fr) auto;
+  grid-template-areas:
+    "thread-header"
+    "thread-messages"
+    "thread-reply";
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 14px;
+  min-height: 0;
 }
 
 .thread-header {
+  grid-area: thread-header;
   border-bottom: 1px solid rgba(148, 163, 184, 0.2);
   padding-bottom: 13px;
 }
@@ -1146,10 +1153,12 @@ textarea:focus {
 }
 
 .message-thread {
+  grid-area: thread-messages;
   display: grid;
   align-content: start;
   grid-auto-rows: max-content;
   gap: 10px;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   border: 1px solid rgba(148, 163, 184, 0.2);
@@ -1212,10 +1221,17 @@ textarea:focus {
 }
 
 .reply-box {
+  grid-area: thread-reply;
+  position: sticky;
+  bottom: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, 0.36fr) auto;
   align-items: end;
   gap: 10px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.86);
+  padding-top: 10px;
+  backdrop-filter: blur(14px);
 }
 
 .reply-media-fields {
@@ -1334,6 +1350,23 @@ textarea:focus {
 
   .crm-shell {
     min-height: auto;
+    height: auto;
+  }
+
+  .conversation-list {
+    max-height: min(440px, 42vh);
+  }
+
+  .crm-thread-panel {
+    grid-template-areas:
+      "thread-header"
+      "thread-reply"
+      "thread-messages";
+    grid-template-rows: auto auto minmax(260px, 48vh);
+  }
+
+  .message-thread {
+    max-height: 48vh;
   }
 }
 
@@ -1356,6 +1389,20 @@ textarea:focus {
 
   .reply-box {
     grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .reply-box textarea {
+    min-height: 64px;
+  }
+
+  .reply-media-fields,
+  .reply-actions {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .reply-actions button {
+    min-height: 38px;
   }
 
   .crm-tag-form,
@@ -1629,7 +1676,7 @@ textarea:focus {
                     <option value="document">Documento</option>
                     <option value="audio">Audio</option>
                   </select>
-                  <input name="mediaUrl" inputmode="url" placeholder="URL de archivo" />
+                  <input name="mediaFile" type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx" />
                 </div>
                 <div class="reply-actions">
                   <button class="primary-button" type="submit">Enviar API</button>
@@ -1974,6 +2021,32 @@ async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers,
+  });
+  const contentType = response.headers.get("content-type") || "";
+  const payload = contentType.includes("application/json")
+    ? await response.json()
+    : { error: await response.text() };
+  if (response.status === 401) {
+    panelCode = "";
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    showAuthGate();
+    throw new Error("Ingresa el código del panel");
+  }
+  if (!response.ok) throw new Error(payload.error || "No se pudo conectar");
+  hideAuthGate();
+  return payload;
+}
+
+async function apiForm(path, formData) {
+  const headers = {};
+  if (panelCode) {
+    headers.Authorization = `Basic ${btoa(`panel:${panelCode}`)}`;
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers,
+    body: formData,
   });
   const contentType = response.headers.get("content-type") || "";
   const payload = contentType.includes("application/json")
@@ -2944,6 +3017,17 @@ function renderCrm() {
   }
 }
 
+function focusReplyComposer() {
+  requestAnimationFrame(() => {
+    const form = document.getElementById("replyForm");
+    if (!form || form.classList.contains("disabled")) return;
+    if (window.matchMedia("(max-width: 1080px)").matches) {
+      form.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    form.elements.text?.focus({ preventScroll: true });
+  });
+}
+
 function renderMessageAttachments(attachments = []) {
   if (!attachments?.length) return "";
   return `
@@ -3182,14 +3266,17 @@ function openWhatsAppDraft() {
     return;
   }
   const text = form.elements.text.value.trim();
-  const mediaUrl = form.elements.mediaUrl.value.trim();
-  const draft = [text, mediaUrl].filter(Boolean).join("\n");
-  if (!draft) {
-    toast("Escribe un mensaje o URL primero");
+  const mediaFile = form.elements.mediaFile.files?.[0] || null;
+  if (!text && !mediaFile) {
+    toast("Escribe un mensaje o selecciona un archivo");
     return;
   }
   const phone = normalizePhone(conversation.phone);
-  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(draft)}`, "_blank", "noopener,noreferrer");
+  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text || "")}`, "_blank", "noopener,noreferrer");
+  if (mediaFile) {
+    toast("Se abrió WhatsApp. Adjunta el archivo manualmente en la ventana.");
+    return;
+  }
   toast("Se abrió WhatsApp con el texto listo");
 }
 
@@ -3426,6 +3513,7 @@ document.addEventListener("click", (event) => {
   if (conversationButton) {
     activeConversationId = conversationButton.dataset.conversationId;
     renderCrm();
+    focusReplyComposer();
     return;
   }
 
@@ -3555,10 +3643,21 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
   const conversation = (state.conversations || []).find((item) => item.id === activeConversationId);
   const form = event.currentTarget;
   const text = form.elements.text.value.trim();
-  const mediaUrl = form.elements.mediaUrl.value.trim();
+  const mediaFile = form.elements.mediaFile.files?.[0] || null;
   const mediaType = form.elements.mediaType.value;
-  if (!conversation || (!text && !mediaUrl)) return;
+  if (!conversation || (!text && !mediaFile)) return;
   try {
+    let uploadedMedia = null;
+    if (mediaFile) {
+      if (conversation.channel !== "whatsapp") {
+        toast("Los archivos desde dispositivo por ahora solo estan listos para WhatsApp");
+        return;
+      }
+      const uploadForm = new FormData();
+      uploadForm.append("file", mediaFile);
+      uploadForm.append("mediaType", mediaType);
+      uploadedMedia = await apiForm("/api/media/whatsapp", uploadForm);
+    }
     const remoteState = await api("/api/messages", {
       method: "POST",
       body: JSON.stringify({
@@ -3570,14 +3669,15 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
         name: conversation.name,
         customName: conversation.customName || "",
         text,
-        mediaUrl,
         mediaType,
+        mediaId: uploadedMedia?.mediaId || "",
+        mediaFilename: uploadedMedia?.filename || mediaFile?.name || "",
       }),
     });
     form.reset();
     applyRemoteState(remoteState);
     render();
-    toast(mediaUrl ? "Mensaje con adjunto enviado" : "Mensaje enviado");
+    toast(mediaFile ? "Mensaje con archivo enviado" : "Mensaje enviado");
   } catch (error) {
     if (isWhatsAppPermissionError(error)) {
       toast("Meta no permite enviar con el token actual. Usa Abrir WhatsApp o configura el token COEX de envio.");
