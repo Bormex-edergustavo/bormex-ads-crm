@@ -163,7 +163,7 @@ Deno.serve(async (req) => {
     }
 
     if (pathname === "/api/sales" && req.method === "POST") {
-      const sale = normalizeSale(await readJson(req));
+      const sale = await enrichSaleAttribution(normalizeSale(await readJson(req)));
       await upsertItems("sales", [sale]);
       return json(filterStateForRole(await readDb(), accessRole));
     }
@@ -1896,6 +1896,93 @@ function normalizeSale(body: any) {
     attributionSource: String(body.attributionSource || ""),
     sourceConversationId: String(body.sourceConversationId || ""),
   };
+}
+
+async function enrichSaleAttribution(sale: Record<string, any>) {
+  if (hasAttribution(sale)) return sale;
+  const db = await readDb();
+  const attribution = findSaleAttribution(sale, db);
+  if (!attribution) {
+    return { ...sale, attributionSource: sale.attributionSource || "missing_meta_referral" };
+  }
+  return {
+    ...sale,
+    adId: attribution.adId || "",
+    ad: attribution.ad || "",
+    adset: attribution.adset || "",
+    campaign: attribution.campaign || "",
+    campaignId: attribution.campaignId || "",
+    attributionSource: attribution.attributionSource || "auto_sale_attribution",
+  };
+}
+
+function findSaleAttribution(sale: Record<string, any>, db: typeof defaultDb) {
+  const conversation = findConversationForSale(sale, db);
+  return (
+    extractAttribution(conversation, "conversation") ||
+    extractAttribution(findLeadForSaleRecord(sale, db), "lead") ||
+    extractAttribution(findMessageAttributionForSale(sale, conversation, db), "message_referral")
+  );
+}
+
+function findConversationForSale(sale: Record<string, any>, db: typeof defaultDb) {
+  const sourceConversationId = String(sale.sourceConversationId || "");
+  if (sourceConversationId) {
+    const direct = (db.conversations || []).find((conversation: any) => String(conversation.id || "") === sourceConversationId);
+    if (direct) return direct;
+  }
+  const phone = normalizePhone(sale.phone || "");
+  if (!phone) return null;
+  return [...(db.conversations || [])]
+    .filter((conversation: any) => normalizePhone(conversation.phone || conversation.contactId || "") === phone)
+    .sort((a: any, b: any) => Date.parse(String(b.lastAt || "")) - Date.parse(String(a.lastAt || "")))[0] || null;
+}
+
+function findLeadForSaleRecord(sale: Record<string, any>, db: typeof defaultDb) {
+  const phone = normalizePhone(sale.phone || "");
+  if (!phone) return null;
+  return [...(db.leads || [])]
+    .filter((lead: any) => normalizePhone(lead.phone || "") === phone)
+    .sort((a: any, b: any) => Date.parse(String(b.date || "")) - Date.parse(String(a.date || "")))[0] || null;
+}
+
+function findMessageAttributionForSale(sale: Record<string, any>, conversation: any, db: typeof defaultDb) {
+  const phone = normalizePhone(sale.phone || conversation?.phone || conversation?.contactId || "");
+  const conversationId = String(sale.sourceConversationId || conversation?.id || "");
+  return [...(db.messages || [])]
+    .filter((message: any) => {
+      if (conversationId && String(message.conversationId || "") === conversationId) return true;
+      return phone && [message.from, message.to].some((value) => normalizePhone(value || "") === phone);
+    })
+    .filter(hasAttribution)
+    .sort((a: any, b: any) => Number(Boolean(normalizeAdId(b.adId || ""))) - Number(Boolean(normalizeAdId(a.adId || ""))))[0] || null;
+}
+
+function extractAttribution(record: any, source: string) {
+  if (!hasAttribution(record)) return null;
+  return {
+    adId: normalizeAdId(record.adId || record.ad_id || record.metaAdId || ""),
+    ad: String(record.ad || ""),
+    adset: String(record.adset || ""),
+    campaign: String(record.campaign || ""),
+    campaignId: String(record.campaignId || ""),
+    ctwaClid: String(record.ctwaClid || ""),
+    sourceUrl: String(record.sourceUrl || ""),
+    attributionSource: String(record.attributionSource || source),
+  };
+}
+
+function hasAttribution(record: any) {
+  if (!record) return false;
+  return Boolean(
+    normalizeAdId(record.adId || record.ad_id || record.metaAdId || "") ||
+      record.ad ||
+      record.adset ||
+      record.campaign ||
+      record.campaignId ||
+      record.ctwaClid ||
+      record.sourceUrl,
+  );
 }
 
 function normalizeCampaignPeriod(body: any) {

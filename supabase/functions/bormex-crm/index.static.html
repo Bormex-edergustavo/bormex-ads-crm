@@ -1858,8 +1858,8 @@ textarea:focus {
                 <input name="date" type="date" required />
               </label>
               <label class="full">
-                ID del anuncio
-                <input name="adId" list="adIdOptions" placeholder="Pega el ad_id de Business Suite" />
+                ID del anuncio opcional
+                <input name="adId" list="adIdOptions" placeholder="El CRM lo llena solo cuando Meta lo entrega" />
                 <datalist id="adIdOptions"></datalist>
               </label>
               <div class="form-actions full">
@@ -2086,6 +2086,7 @@ let state = loadState();
 let serverAvailable = false;
 let activeConversationId = "";
 let remoteConfig = {};
+let remoteRequestVersion = 0;
 const mediaObjectUrlCache = new Map();
 
 const money = new Intl.NumberFormat("es-MX", {
@@ -2250,12 +2251,14 @@ function hideAuthGate() {
 }
 
 async function syncFromServer() {
+  const requestVersion = ++remoteRequestVersion;
   try {
     const [config, remoteState, coexistenceSetup] = await Promise.all([
       api("/api/config"),
       api("/api/state"),
       api("/api/meta/coexistence").catch(() => null),
     ]);
+    if (requestVersion !== remoteRequestVersion) return;
     serverAvailable = true;
     remoteConfig = config || {};
     accessRole = config.role || roleFromCode(panelCode) || accessRole;
@@ -2271,10 +2274,17 @@ async function syncFromServer() {
     renderConnectionStatus(config, remoteState, coexistenceSetup);
     saveState();
   } catch {
+    if (requestVersion !== remoteRequestVersion) return;
     serverAvailable = false;
     remoteConfig = {};
     renderConnectionStatus(null, null);
   }
+}
+
+function scheduleFreshSync(delay = 1200) {
+  window.setTimeout(() => {
+    syncFromServer().then(render).catch(() => {});
+  }, delay);
 }
 
 function renderConnectionStatus(config, remoteState, coexistenceSetup = null) {
@@ -2565,8 +2575,7 @@ function getSaleAttribution(sale) {
       adId: saleAdId,
     };
   }
-  const lead = findLeadForSale(sale);
-  return lead ? { ...lead, source: "lead" } : null;
+  return findKnownAttributionForSale(sale);
 }
 
 function findLeadForPhone(phoneValue) {
@@ -2574,6 +2583,83 @@ function findLeadForPhone(phoneValue) {
   return [...state.leads]
     .filter((lead) => normalizePhone(lead.phone) === phone)
     .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+}
+
+function extractStoredAttribution(record, source = "stored") {
+  if (!record) return null;
+  const adId = normalizeAdId(record.adId || record.ad_id || record.metaAdId);
+  const hasAttribution = Boolean(
+    adId ||
+      record.ad ||
+      record.campaign ||
+      record.adset ||
+      record.campaignId ||
+      record.ctwaClid ||
+      record.sourceUrl,
+  );
+  if (!hasAttribution) return null;
+  const matchedAd = findAdById(adId);
+  return {
+    source: record.attributionSource || source,
+    campaign: record.campaign || matchedAd?.campaign || "",
+    campaignId: record.campaignId || matchedAd?.campaignId || "",
+    adset: record.adset || matchedAd?.adset || "",
+    ad: record.ad || adName(matchedAd) || adId || "",
+    adId,
+    ctwaClid: record.ctwaClid || "",
+    sourceUrl: record.sourceUrl || "",
+  };
+}
+
+function findConversationBySale(sale) {
+  const sourceConversationId = String(sale?.sourceConversationId || "");
+  if (sourceConversationId) {
+    const direct = (state.conversations || []).find((conversation) => conversation.id === sourceConversationId);
+    if (direct) return direct;
+  }
+  const phone = normalizePhone(sale?.phone);
+  if (!phone) return null;
+  return [...(state.conversations || [])]
+    .filter((conversation) => normalizePhone(conversation.phone || conversation.contactId) === phone)
+    .sort((a, b) => new Date(b.lastAt || 0) - new Date(a.lastAt || 0))[0] || null;
+}
+
+function findMessageAttributionForConversation(conversation, phoneValue = "") {
+  const phone = normalizePhone(phoneValue || conversation?.phone || conversation?.contactId);
+  const conversationId = String(conversation?.id || "");
+  return [...(state.messages || [])]
+    .filter((message) => {
+      if (conversationId && message.conversationId === conversationId) return true;
+      return phone && [message.from, message.to].some((value) => normalizePhone(value) === phone);
+    })
+    .map((message) => extractStoredAttribution(message, "message_referral"))
+    .filter(Boolean)
+    .sort((a, b) => Number(Boolean(b.adId)) - Number(Boolean(a.adId)))[0] || null;
+}
+
+function findKnownAttributionForSale(sale) {
+  const conversation = findConversationBySale(sale);
+  const lead = findLeadForSale(sale);
+  return (
+    extractStoredAttribution(conversation, "conversation") ||
+    (lead ? { ...lead, source: "lead" } : null) ||
+    findMessageAttributionForConversation(conversation, sale?.phone)
+  );
+}
+
+function applyKnownSaleAttribution(sale) {
+  const attribution = findKnownAttributionForSale(sale);
+  if (!attribution) {
+    sale.attributionSource = sale.attributionSource || "missing_meta_referral";
+    return sale;
+  }
+  sale.adId = attribution.adId || "";
+  sale.ad = attribution.ad || "";
+  sale.adset = attribution.adset || "";
+  sale.campaign = attribution.campaign || "";
+  sale.campaignId = attribution.campaignId || "";
+  sale.attributionSource = attribution.source || "auto_sale_attribution";
+  return sale;
 }
 
 function defaultCrmTags() {
@@ -2609,18 +2695,11 @@ function isFollowUpTag(tag) {
 }
 
 function getConversationAttribution(conversation) {
-  const directAdId = normalizeAdId(conversation?.adId);
-  if (directAdId || conversation?.ad || conversation?.campaign) {
-    const matchedAd = findAdById(directAdId);
-    return {
-      source: conversation.attributionSource || "conversation",
-      adId: directAdId,
-      ad: conversation.ad || adName(matchedAd) || directAdId,
-      campaign: conversation.campaign || matchedAd?.campaign || "",
-    };
-  }
+  const direct = extractStoredAttribution(conversation, "conversation");
+  if (direct) return direct;
   const lead = getConversationLead(conversation);
-  return lead ? { ...lead, source: "lead" } : null;
+  if (lead) return { ...lead, source: "lead" };
+  return findMessageAttributionForConversation(conversation);
 }
 
 function conversationDueStatus(conversation) {
@@ -2884,6 +2963,11 @@ function renderSalesTable() {
     .map((sale) => {
       const attribution = getSaleAttribution(sale);
       const saleAdId = normalizeAdId(sale.adId);
+      const attributionText = attribution
+        ? `${escapeHtml(attribution.ad)} / ${escapeHtml(attribution.campaign)}`
+        : sale.attributionSource === "missing_meta_referral"
+          ? "Meta no envió origen"
+          : "Sin coincidencia";
       return `
         <tr>
           <td>${escapeHtml(sale.date)}</td>
@@ -2891,7 +2975,7 @@ function renderSalesTable() {
           <td>${escapeHtml(getSaleProducts(sale).join(", "))}</td>
           <td>${money.format(Number(sale.amount || 0))}</td>
           <td>${saleAdId ? escapeHtml(saleAdId) : "Sin ID"}</td>
-          <td>${attribution ? `${escapeHtml(attribution.ad)} / ${escapeHtml(attribution.campaign)}` : "Sin coincidencia"}</td>
+          <td>${attributionText}</td>
           <td>
             <div class="table-actions">
               <button class="secondary-button compact" data-edit-sale-ad="${sale.id}" type="button">Editar ID</button>
@@ -3356,21 +3440,36 @@ async function handleSaleSubmit(event) {
     sourceConversationId: data.sourceConversationId || "",
   };
 
-  applyManualAdAttribution(sale, data.adId);
+  if (normalizeAdId(data.adId)) {
+    applyManualAdAttribution(sale, data.adId);
+  } else {
+    applyKnownSaleAttribution(sale);
+  }
   await saveSale(sale, "Venta registrada");
   form.reset();
   form.elements.date.value = today();
 }
 
-function applyManualAdAttribution(sale, adIdInput) {
+function applyManualAdAttribution(sale, adIdInput, options = {}) {
   const adId = normalizeAdId(adIdInput);
+  if (!adId) {
+    if (options.clearWhenEmpty) {
+      sale.adId = "";
+      sale.campaign = "";
+      sale.campaignId = "";
+      sale.adset = "";
+      sale.ad = "";
+      sale.attributionSource = "";
+    }
+    return sale;
+  }
   const matchedAd = findAdById(adId);
   sale.adId = adId;
-  sale.campaign = adId ? matchedAd?.campaign || sale.campaign || "" : "";
-  sale.campaignId = adId ? matchedAd?.campaignId || sale.campaignId || "" : "";
-  sale.adset = adId ? matchedAd?.adset || sale.adset || "" : "";
-  sale.ad = adId ? adName(matchedAd) || sale.ad || "" : "";
-  sale.attributionSource = adId ? "manual_ad_id" : "";
+  sale.campaign = matchedAd?.campaign || sale.campaign || "";
+  sale.campaignId = matchedAd?.campaignId || sale.campaignId || "";
+  sale.adset = matchedAd?.adset || sale.adset || "";
+  sale.ad = adName(matchedAd) || sale.ad || "";
+  sale.attributionSource = "manual_ad_id";
   return sale;
 }
 
@@ -3398,7 +3497,7 @@ async function editSaleAdId(saleId) {
   const current = normalizeAdId(sale.adId);
   const next = prompt("Pega el ID del anuncio que aparece en Business Suite. Déjalo vacío para quitarlo.", current);
   if (next === null) return;
-  const updated = applyManualAdAttribution({ ...sale }, next);
+  const updated = applyManualAdAttribution({ ...sale }, next, { clearWhenEmpty: true });
   await saveSale(updated, updated.adId ? "ID de anuncio guardado" : "ID de anuncio quitado");
 }
 
@@ -3578,6 +3677,7 @@ function isWhatsAppPermissionError(error) {
 }
 
 function applyRemoteState(remoteState) {
+  remoteRequestVersion += 1;
   state.conversations = remoteState.conversations || state.conversations;
   state.messages = remoteState.messages || state.messages;
   state.sales = remoteState.sales || state.sales;
@@ -3977,6 +4077,8 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
     form.reset();
     applyRemoteState(remoteState);
     render();
+    scheduleFreshSync(1200);
+    scheduleFreshSync(4500);
     toast(mediaFile ? "Mensaje con archivo enviado" : "Mensaje enviado");
   } catch (error) {
     if (isWhatsAppPermissionError(error)) {

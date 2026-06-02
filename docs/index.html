@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
     <title>Bormex Ads CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20260602-crm-media" />
+    <link rel="stylesheet" href="styles.css?v=20260602-crm-sync" />
   </head>
   <body>
     <div class="app-shell">
@@ -241,8 +241,8 @@
                 <input name="date" type="date" required />
               </label>
               <label class="full">
-                ID del anuncio
-                <input name="adId" list="adIdOptions" placeholder="Pega el ad_id de Business Suite" />
+                ID del anuncio opcional
+                <input name="adId" list="adIdOptions" placeholder="El CRM lo llena solo cuando Meta lo entrega" />
                 <datalist id="adIdOptions"></datalist>
               </label>
               <div class="form-actions full">
@@ -433,7 +433,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=20260602-crm-media"></script>
+    <script src="app.js?v=20260602-crm-sync"></script>
     <script>
       window.lucide?.createIcons();
     </script>
