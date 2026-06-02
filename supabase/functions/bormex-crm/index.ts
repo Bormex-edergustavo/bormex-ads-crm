@@ -776,18 +776,54 @@ async function discoverMetaPages() {
 
   for (const token of uniqueTokens([messengerAccessToken(), instagramAccessToken(), metaAdsAccessToken()])) {
     const payload = await safeGraphGet("/me/accounts?fields=id,name,access_token,instagram_business_account{id,username}&limit=100", token);
-    for (const page of payload?.data || []) {
-      if (!page?.id) continue;
-      pages.set(String(page.id), {
-        id: String(page.id),
-        name: String(page.name || "Pagina"),
-        accessToken: String(page.access_token || token),
-        instagramBusinessAccount: page.instagram_business_account,
-      });
+    addDiscoveredPages(pages, payload, token);
+
+    for (const businessId of await discoverMetaBusinessIds(token)) {
+      for (const edge of ["owned_pages", "client_pages"]) {
+        const businessPages = await safeGraphGet(`/${businessId}/${edge}?fields=id,name,access_token,instagram_business_account{id,username}&limit=100`, token);
+        addDiscoveredPages(pages, businessPages, token);
+      }
     }
   }
 
   return [...pages.values()];
+}
+
+function addDiscoveredPages(
+  pages: Map<string, { id: string; name: string; accessToken: string; instagramBusinessAccount?: { id: string; username?: string } }>,
+  payload: any,
+  fallbackToken: string,
+) {
+  for (const page of payload?.data || []) {
+    if (!page?.id) continue;
+    pages.set(String(page.id), {
+      id: String(page.id),
+      name: String(page.name || "Pagina"),
+      accessToken: String(page.access_token || fallbackToken),
+      instagramBusinessAccount: page.instagram_business_account,
+    });
+  }
+}
+
+async function discoverMetaBusinessIds(token: string) {
+  const ids = new Set([
+    Deno.env.get("META_BUSINESS_ID") || "",
+    Deno.env.get("META_BUSINESS_ACCOUNT_ID") || "",
+    Deno.env.get("BUSINESS_ID") || "",
+  ].filter(Boolean));
+
+  const payload = await safeGraphGet("/me/businesses?fields=id,name&limit=100", token);
+  for (const business of payload?.data || []) {
+    if (business?.id) ids.add(String(business.id));
+  }
+
+  const whatsappBusinessAccountId = Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID") || "";
+  if (whatsappBusinessAccountId) {
+    const waba = await safeGraphGet(`/${whatsappBusinessAccountId}?fields=owner_business{id,name}`, token);
+    if (waba?.owner_business?.id) ids.add(String(waba.owner_business.id));
+  }
+
+  return [...ids];
 }
 
 function uniqueTokens(tokens: string[]) {
