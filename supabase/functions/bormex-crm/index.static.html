@@ -144,6 +144,11 @@ svg {
   display: grid;
   grid-template-columns: 286px minmax(0, 1fr);
   min-height: 100vh;
+  transition: grid-template-columns 180ms ease;
+}
+
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 84px minmax(0, 1fr);
 }
 
 .sidebar {
@@ -160,6 +165,9 @@ svg {
   border-right: 1px solid rgba(255, 255, 255, 0.72);
   box-shadow: 12px 0 42px rgba(15, 23, 42, 0.08);
   backdrop-filter: var(--glass-blur);
+  transition:
+    padding 180ms ease,
+    width 180ms ease;
 }
 
 .brand {
@@ -169,7 +177,12 @@ svg {
   min-height: 52px;
 }
 
+.brand > div {
+  min-width: 0;
+}
+
 .brand-mark {
+  flex: 0 0 44px;
   display: grid;
   place-items: center;
   width: 44px;
@@ -198,6 +211,41 @@ svg {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
+}
+
+.sidebar-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.62);
+  color: var(--muted-strong);
+  box-shadow: var(--shadow-sm);
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.sidebar-toggle:hover {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(37, 99, 235, 0.26);
+  color: var(--primary);
+  transform: translateY(-1px);
+}
+
+.sidebar-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
+.sidebar-icon-collapsed {
+  display: none;
 }
 
 .nav {
@@ -283,6 +331,50 @@ svg {
   width: 15px;
   height: 15px;
   color: var(--primary);
+}
+
+.app-shell.sidebar-collapsed .sidebar {
+  align-items: center;
+  gap: 18px;
+  padding: 22px 14px;
+}
+
+.app-shell.sidebar-collapsed .brand {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.app-shell.sidebar-collapsed .brand > div,
+.app-shell.sidebar-collapsed .nav-item span,
+.app-shell.sidebar-collapsed .sync-chip span,
+.app-shell.sidebar-collapsed #clearDemoData,
+.app-shell.sidebar-collapsed .sidebar-icon-expanded {
+  display: none;
+}
+
+.app-shell.sidebar-collapsed .sidebar-icon-collapsed {
+  display: block;
+}
+
+.app-shell.sidebar-collapsed .sidebar-toggle {
+  margin-left: 0;
+}
+
+.app-shell.sidebar-collapsed .nav,
+.app-shell.sidebar-collapsed .sidebar-footer {
+  width: 100%;
+}
+
+.app-shell.sidebar-collapsed .nav-item,
+.app-shell.sidebar-collapsed .sync-chip {
+  justify-content: center;
+  padding: 0;
+}
+
+.app-shell.sidebar-collapsed .sync-chip {
+  min-height: 40px;
 }
 
 .main {
@@ -940,7 +1032,7 @@ textarea:focus {
 
 .crm-shell {
   display: grid;
-  grid-template-columns: minmax(280px, 0.31fr) minmax(0, 1fr);
+  grid-template-columns: minmax(360px, 420px) minmax(0, 1fr);
   gap: 18px;
   height: calc(100vh - 118px);
   min-height: 720px;
@@ -958,15 +1050,26 @@ textarea:focus {
   gap: 12px;
 }
 
+.crm-list-panel .panel-header {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-bottom: 0;
+}
+
+.crm-list-panel .panel-header p {
+  max-width: none;
+}
+
 .crm-search {
   width: 100%;
 }
 
 .crm-filter-row {
   display: grid;
-  grid-template-columns: minmax(120px, 0.8fr) minmax(170px, 1.2fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
-  width: min(100%, 420px);
+  width: 100%;
 }
 
 .crm-tag-form {
@@ -983,6 +1086,7 @@ textarea:focus {
   display: grid;
   align-content: start;
   gap: 9px;
+  overflow-x: hidden;
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -994,6 +1098,7 @@ textarea:focus {
   align-content: start;
   align-items: start;
   gap: 10px;
+  width: 100%;
   min-height: auto;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: var(--radius);
@@ -1053,6 +1158,7 @@ textarea:focus {
   align-content: start;
   gap: 5px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .conversation-meta-row {
@@ -1474,35 +1580,50 @@ textarea:focus {
 }
 
 @media (max-width: 1080px) {
-  .app-shell {
+  .app-shell,
+  .app-shell.sidebar-collapsed {
     grid-template-columns: 1fr;
   }
 
-  .sidebar {
+  .sidebar,
+  .app-shell.sidebar-collapsed .sidebar {
     position: sticky;
     top: 0;
     z-index: 6;
     height: auto;
+    align-items: stretch;
+    gap: 12px;
     padding: 12px 14px;
     border-right: 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.72);
   }
 
   .brand,
-  .sidebar-footer {
+  .sidebar-footer,
+  .app-shell.sidebar-collapsed .brand,
+  .app-shell.sidebar-collapsed .sidebar-footer {
     display: none;
   }
 
-  .nav {
+  .nav,
+  .app-shell.sidebar-collapsed .nav {
     display: flex;
     gap: 8px;
+    width: auto;
     overflow-x: auto;
     padding-bottom: 2px;
   }
 
-  .nav-item {
+  .nav-item,
+  .app-shell.sidebar-collapsed .nav-item {
     flex: 0 0 auto;
+    justify-content: flex-start;
     min-height: 40px;
+    padding: 0 12px;
+  }
+
+  .app-shell.sidebar-collapsed .nav-item span {
+    display: block;
   }
 
   .nav-item:hover {
@@ -1661,7 +1782,7 @@ textarea:focus {
 </style>
   </head>
   <body>
-    <div class="app-shell">
+    <div class="app-shell" id="appShell">
       <aside class="sidebar">
         <div class="brand">
             <span class="brand-mark">BX</span>
@@ -1669,6 +1790,10 @@ textarea:focus {
               <strong>Bormex CRM</strong>
               <span>Ads + Inbox</span>
             </div>
+            <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Contraer menú" title="Contraer menú" aria-pressed="false">
+              <i class="sidebar-icon-expanded" data-lucide="panel-left-close"></i>
+              <i class="sidebar-icon-collapsed" data-lucide="panel-left-open"></i>
+            </button>
           </div>
 
         <nav class="nav" aria-label="Secciones">
@@ -2094,6 +2219,7 @@ textarea:focus {
     <script>
 const STORAGE_KEY = "ventas_ads_state_v1";
 const AUTH_STORAGE_KEY = "ventas_ads_panel_code_v1";
+const SIDEBAR_COLLAPSED_KEY = "ventas_ads_sidebar_collapsed_v1";
 const ADS_ACCESS_CODE = "2607";
 const SALES_ACCESS_CODE = "1234";
 const API_BASE = getApiBase();
@@ -2147,6 +2273,23 @@ function roleFromCode(code) {
   if (String(code || "").trim() === SALES_ACCESS_CODE) return "sales";
   if (String(code || "").trim() === ADS_ACCESS_CODE) return "ads";
   return "";
+}
+
+function applySidebarState() {
+  const shell = document.getElementById("appShell");
+  const toggle = document.getElementById("sidebarToggle");
+  if (!shell || !toggle) return;
+  const collapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  shell.classList.toggle("sidebar-collapsed", collapsed);
+  toggle.setAttribute("aria-pressed", collapsed ? "true" : "false");
+  toggle.setAttribute("aria-label", collapsed ? "Expandir menú" : "Contraer menú");
+  toggle.setAttribute("title", collapsed ? "Expandir menú" : "Contraer menú");
+}
+
+function toggleSidebar() {
+  const collapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "0" : "1");
+  applySidebarState();
 }
 
 function isSalesRole() {
@@ -4008,6 +4151,7 @@ document.getElementById("saleForm").addEventListener("submit", handleSaleSubmit)
 document.getElementById("crmTagForm")?.addEventListener("submit", createCrmTag);
 document.getElementById("runFollowups")?.addEventListener("click", runFollowups);
 document.getElementById("openWhatsAppDraft").addEventListener("click", openWhatsAppDraft);
+document.getElementById("sidebarToggle")?.addEventListener("click", toggleSidebar);
 document.querySelector("#replyForm input[name='mediaFile']")?.addEventListener("change", (event) => {
   const form = document.getElementById("replyForm");
   const file = event.currentTarget.files?.[0] || null;
@@ -4266,6 +4410,7 @@ document.getElementById("logoutPanel").addEventListener("click", () => {
 
 document.getElementById("saleForm").elements.date.value = today();
 ensureDateFilters();
+applySidebarState();
 
 render();
 saveState();

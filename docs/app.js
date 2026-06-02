@@ -1,5 +1,6 @@
 const STORAGE_KEY = "ventas_ads_state_v1";
 const AUTH_STORAGE_KEY = "ventas_ads_panel_code_v1";
+const SIDEBAR_COLLAPSED_KEY = "ventas_ads_sidebar_collapsed_v1";
 const ADS_ACCESS_CODE = "2607";
 const SALES_ACCESS_CODE = "1234";
 const API_BASE = getApiBase();
@@ -53,6 +54,23 @@ function roleFromCode(code) {
   if (String(code || "").trim() === SALES_ACCESS_CODE) return "sales";
   if (String(code || "").trim() === ADS_ACCESS_CODE) return "ads";
   return "";
+}
+
+function applySidebarState() {
+  const shell = document.getElementById("appShell");
+  const toggle = document.getElementById("sidebarToggle");
+  if (!shell || !toggle) return;
+  const collapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  shell.classList.toggle("sidebar-collapsed", collapsed);
+  toggle.setAttribute("aria-pressed", collapsed ? "true" : "false");
+  toggle.setAttribute("aria-label", collapsed ? "Expandir menú" : "Contraer menú");
+  toggle.setAttribute("title", collapsed ? "Expandir menú" : "Contraer menú");
+}
+
+function toggleSidebar() {
+  const collapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "0" : "1");
+  applySidebarState();
 }
 
 function isSalesRole() {
@@ -1914,6 +1932,7 @@ document.getElementById("saleForm").addEventListener("submit", handleSaleSubmit)
 document.getElementById("crmTagForm")?.addEventListener("submit", createCrmTag);
 document.getElementById("runFollowups")?.addEventListener("click", runFollowups);
 document.getElementById("openWhatsAppDraft").addEventListener("click", openWhatsAppDraft);
+document.getElementById("sidebarToggle")?.addEventListener("click", toggleSidebar);
 document.querySelector("#replyForm input[name='mediaFile']")?.addEventListener("change", (event) => {
   const form = document.getElementById("replyForm");
   const file = event.currentTarget.files?.[0] || null;
@@ -2172,6 +2191,7 @@ document.getElementById("logoutPanel").addEventListener("click", () => {
 
 document.getElementById("saleForm").elements.date.value = today();
 ensureDateFilters();
+applySidebarState();
 
 render();
 saveState();

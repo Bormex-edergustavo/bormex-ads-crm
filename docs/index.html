@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
     <title>Bormex Ads CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20260602-crm-files-audio" />
+    <link rel="stylesheet" href="styles.css?v=20260602-crm-sidebar-layout" />
   </head>
   <body>
-    <div class="app-shell">
+    <div class="app-shell" id="appShell">
       <aside class="sidebar">
         <div class="brand">
             <span class="brand-mark">BX</span>
@@ -16,6 +16,10 @@
               <strong>Bormex CRM</strong>
               <span>Ads + Inbox</span>
             </div>
+            <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Contraer menú" title="Contraer menú" aria-pressed="false">
+              <i class="sidebar-icon-expanded" data-lucide="panel-left-close"></i>
+              <i class="sidebar-icon-collapsed" data-lucide="panel-left-open"></i>
+            </button>
           </div>
 
         <nav class="nav" aria-label="Secciones">
@@ -438,7 +442,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=20260602-crm-files-audio"></script>
+    <script src="app.js?v=20260602-crm-sidebar-layout"></script>
     <script>
       window.lucide?.createIcons();
     </script>
