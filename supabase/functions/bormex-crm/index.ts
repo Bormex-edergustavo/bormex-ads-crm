@@ -224,7 +224,7 @@ function configPayload(role = "") {
 }
 
 function isPublicPath(pathname: string) {
-  return pathname === "/webhooks/whatsapp" || pathname === "/webhooks/meta" || pathname === "/api/cron/sync" || pathname === "/oauth/meta";
+  return ["/", "/index.html", "/health", "/webhooks/whatsapp", "/webhooks/meta", "/api/cron/sync", "/oauth/meta"].includes(pathname);
 }
 
 function getAccessRole(req: Request) {
