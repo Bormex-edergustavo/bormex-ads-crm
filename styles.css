@@ -954,6 +954,13 @@ textarea:focus {
   width: 100%;
 }
 
+.crm-filter-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(170px, 1.2fr);
+  gap: 8px;
+  width: min(100%, 420px);
+}
+
 .crm-tag-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 120px 72px;
@@ -1522,6 +1529,11 @@ textarea:focus {
 
   .panel-header select {
     max-width: none;
+  }
+
+  .crm-filter-row {
+    grid-template-columns: 1fr;
+    width: 100%;
   }
 
   .reply-box {

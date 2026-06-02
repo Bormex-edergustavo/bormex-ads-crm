@@ -1085,12 +1085,43 @@ function getConversationSearchText(conversation) {
 }
 
 function getConversationRows() {
-  const filter = document.getElementById("crmChannelFilter")?.value || "all";
+  const channelFilter = document.getElementById("crmChannelFilter")?.value || "all";
+  const tagFilter = document.getElementById("crmTagFilter")?.value || "all";
   const query = (document.getElementById("crmSearch")?.value || "").trim().toLowerCase();
   return [...(state.conversations || [])]
-    .filter((conversation) => filter === "all" || conversation.channel === filter)
+    .filter((conversation) => channelFilter === "all" || conversation.channel === channelFilter)
+    .filter((conversation) => {
+      if (tagFilter === "all") return true;
+      const tagIds = conversationTagIds(conversation);
+      if (tagFilter === "none") return !tagIds.length;
+      return tagIds.includes(tagFilter);
+    })
     .filter((conversation) => !query || getConversationSearchText(conversation).includes(query))
     .sort((a, b) => new Date(b.lastAt || 0) - new Date(a.lastAt || 0));
+}
+
+function renderCrmTagFilter() {
+  const select = document.getElementById("crmTagFilter");
+  if (!select) return;
+  const current = select.value || "all";
+  const tags = getCrmTags();
+  const tagCounts = new Map();
+  let noTagCount = 0;
+  for (const conversation of state.conversations || []) {
+    const tagIds = conversationTagIds(conversation);
+    if (!tagIds.length) {
+      noTagCount += 1;
+      continue;
+    }
+    for (const tagId of tagIds) tagCounts.set(tagId, (tagCounts.get(tagId) || 0) + 1);
+  }
+  select.innerHTML = [
+    `<option value="all">Todas las etiquetas</option>`,
+    `<option value="none">Sin etiqueta (${noTagCount})</option>`,
+    ...tags.map((tag) => `<option value="${escapeHtml(tag.id)}">${escapeHtml(tag.name)} (${tagCounts.get(tag.id) || 0})</option>`),
+  ].join("");
+  const validValues = new Set(["all", "none", ...tags.map((tag) => tag.id)]);
+  select.value = validValues.has(current) ? current : "all";
 }
 
 function getConversationLead(conversation) {
@@ -1103,6 +1134,7 @@ function renderCrm() {
   const thread = document.getElementById("messageThread");
   const header = document.getElementById("threadHeader");
   if (!list || !thread || !header) return;
+  renderCrmTagFilter();
   const previousThreadConversationId = thread.dataset.conversationId || "";
   const threadWasNearBottom = thread.scrollTop + thread.clientHeight >= thread.scrollHeight - 80;
 
@@ -1939,6 +1971,10 @@ document.getElementById("exportSpendCsv").addEventListener("click", () => {
 
 document.getElementById("importCsv").addEventListener("click", importCsv);
 document.getElementById("crmChannelFilter").addEventListener("change", () => {
+  activeConversationId = "";
+  renderCrm();
+});
+document.getElementById("crmTagFilter").addEventListener("change", () => {
   activeConversationId = "";
   renderCrm();
 });

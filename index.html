@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
     <title>Bormex Ads CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20260602-crm-sync" />
+    <link rel="stylesheet" href="styles.css?v=20260602-crm-tag-filter" />
   </head>
   <body>
     <div class="app-shell">
@@ -158,12 +158,17 @@
                   <h2>Inbox</h2>
                   <p>WhatsApp, Messenger e Instagram.</p>
                 </div>
-                <select id="crmChannelFilter" aria-label="Canal">
-                  <option value="all">Todos</option>
-                  <option value="whatsapp">WhatsApp</option>
-                  <option value="messenger">Messenger</option>
-                  <option value="instagram">Instagram</option>
-                </select>
+                <div class="crm-filter-row">
+                  <select id="crmChannelFilter" aria-label="Canal">
+                    <option value="all">Todos</option>
+                    <option value="whatsapp">WhatsApp</option>
+                    <option value="messenger">Messenger</option>
+                    <option value="instagram">Instagram</option>
+                  </select>
+                  <select id="crmTagFilter" aria-label="Etiqueta">
+                    <option value="all">Todas las etiquetas</option>
+                  </select>
+                </div>
               </div>
               <input id="crmSearch" class="crm-search" placeholder="Buscar nombre, número o anuncio" />
               <div class="conversation-list" id="conversationList"></div>
@@ -433,7 +438,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=20260602-crm-sync"></script>
+    <script src="app.js?v=20260602-crm-tag-filter"></script>
     <script>
       window.lucide?.createIcons();
     </script>
