@@ -841,7 +841,8 @@ async function graphJsonRequest(path: string, token: string, method: "POST", bod
 
 function absoluteWebhookUrl(requestUrl: URL, path: string) {
   const configuredBase = Deno.env.get("BORMEX_FUNCTION_BASE_URL") || Deno.env.get("CRM_FUNCTION_BASE_URL") || "";
-  const base = configuredBase || `${requestUrl.origin}${requestUrl.pathname.startsWith("/bormex-crm/") ? "/bormex-crm" : ""}`;
+  const origin = requestUrl.origin.replace(/^http:/, "https:");
+  const base = configuredBase || `${origin}${requestUrl.pathname.startsWith("/bormex-crm/") ? "/bormex-crm" : ""}`;
   return `${base.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
