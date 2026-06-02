@@ -74,7 +74,7 @@ Deno.serve(async (req) => {
     }
 
     if (pathname === "/api/meta/subscribe" && req.method === "POST") {
-      return json(await subscribeMetaWebhooks());
+      return json(await subscribeMetaWebhooks(url));
     }
 
     if (pathname === "/api/ads-range" && req.method === "POST") {
@@ -685,7 +685,7 @@ async function getMetaSubscriptionDiagnostics() {
       configured: Boolean(whatsappBusinessAccountId && whatsappAccessToken()),
       businessAccountId: maskValue(whatsappBusinessAccountId),
       subscribedApps: whatsappBusinessAccountId && whatsappAccessToken()
-        ? await safeGraphGet(`/${whatsappBusinessAccountId}/subscribed_apps`, whatsappAccessToken())
+        ? await safeGraphGet(`/${whatsappBusinessAccountId}/subscribed_apps?fields=whatsapp_business_api_data`, whatsappAccessToken())
         : null,
     },
     pages: await Promise.all(
@@ -706,15 +706,18 @@ async function getMetaSubscriptionDiagnostics() {
   };
 }
 
-async function subscribeMetaWebhooks() {
+async function subscribeMetaWebhooks(requestUrl: URL) {
   const results = [];
   const whatsappBusinessAccountId = Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID") || "";
   if (whatsappBusinessAccountId && whatsappAccessToken()) {
+    const callbackUrl = absoluteWebhookUrl(requestUrl, "/webhooks/whatsapp");
     results.push({
       channel: "whatsapp",
       target: maskValue(whatsappBusinessAccountId),
-      result: await safeGraphPost(`/${whatsappBusinessAccountId}/subscribed_apps`, whatsappAccessToken(), {
-        subscribed_fields: "messages,history,smb_app_state_sync,smb_message_echoes,account_update",
+      callbackUrl,
+      result: await safeGraphPostJson(`/${whatsappBusinessAccountId}/subscribed_apps`, whatsappAccessToken(), {
+        override_callback_uri: callbackUrl,
+        verify_token: metaWebhookVerifyToken(),
       }),
     });
   } else {
@@ -802,6 +805,15 @@ async function safeGraphPost(path: string, token: string, params: Record<string,
   }
 }
 
+async function safeGraphPostJson(path: string, token: string, body: Record<string, string>) {
+  try {
+    const payload = await graphJsonRequest(path, token, "POST", body);
+    return { ok: true, payload };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Error Graph API" };
+  }
+}
+
 async function graphRequest(path: string, token: string, method: "GET" | "POST", params: Record<string, string> = {}) {
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
   const url = new URL(`https://graph.facebook.com/${graphVersion()}${cleanPath}`);
@@ -811,6 +823,26 @@ async function graphRequest(path: string, token: string, method: "GET" | "POST",
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error?.message || `Graph API respondio ${response.status}`);
   return payload;
+}
+
+async function graphJsonRequest(path: string, token: string, method: "POST", body: Record<string, string>) {
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  const url = new URL(`https://graph.facebook.com/${graphVersion()}${cleanPath}`);
+  url.searchParams.set("access_token", token);
+  const response = await fetch(url.toString(), {
+    method,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error?.message || `Graph API respondio ${response.status}`);
+  return payload;
+}
+
+function absoluteWebhookUrl(requestUrl: URL, path: string) {
+  const configuredBase = Deno.env.get("BORMEX_FUNCTION_BASE_URL") || Deno.env.get("CRM_FUNCTION_BASE_URL") || "";
+  const base = configuredBase || `${requestUrl.origin}${requestUrl.pathname.startsWith("/bormex-crm/") ? "/bormex-crm" : ""}`;
+  return `${base.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 function extractWhatsAppEvents(payload: any) {
