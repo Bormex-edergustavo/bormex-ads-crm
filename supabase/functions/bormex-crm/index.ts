@@ -758,12 +758,14 @@ function buildWhatsAppBusinessAppOnboardingUrl(appId: string, configId: string, 
   url.searchParams.set("client_id", appId);
   url.searchParams.set("redirect_uri", callbackUrl);
   url.searchParams.set("response_type", "code");
+  url.searchParams.set("override_default_response_type", "true");
   url.searchParams.set("config_id", configId);
   url.searchParams.set("scope", Deno.env.get("META_ONBOARDING_SCOPES") || "whatsapp_business_management,whatsapp_business_messaging,business_management");
   url.searchParams.set(
     "extras",
     JSON.stringify({
-      feature: "whatsapp_business_app_onboarding",
+      feature: "whatsapp_embedded_signup",
+      featureType: "whatsapp_business_app_onboarding",
       sessionInfoVersion: "3",
       setup: {
         external_business_id: Deno.env.get("META_EXTERNAL_BUSINESS_ID") || "bormex-ads-crm",
