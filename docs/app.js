@@ -5,6 +5,7 @@ const SALES_ACCESS_CODE = "1234";
 const API_BASE = getApiBase();
 let panelCode = localStorage.getItem(AUTH_STORAGE_KEY) || "";
 let accessRole = roleFromCode(panelCode);
+const MEDIA_TYPES = new Set(["image", "video", "audio", "document"]);
 
 const defaultState = {
   conversations: [],
@@ -1329,8 +1330,16 @@ function renderMessageAttachments(attachments = []) {
   `;
 }
 
-function getAttachmentLabel(attachment) {
-  return attachment?.filename || attachment?.title || attachment?.caption || attachment?.mimeType || attachment?.type || "archivo";
+function getAttachmentLabel(attachment = {}) {
+  const explicitLabel = attachment.filename || attachment.title || attachment.caption;
+  if (explicitLabel) return explicitLabel;
+  const type = String(attachment.type || "").toLowerCase();
+  const mimeType = String(attachment.mimeType || "").toLowerCase();
+  if (type === "audio" || mimeType.startsWith("audio/")) return "Audio de WhatsApp";
+  if (type === "video" || mimeType.startsWith("video/")) return "Video";
+  if (type === "image" || mimeType.startsWith("image/")) return "Foto";
+  if (type === "document" || mimeType) return "Documento";
+  return "archivo";
 }
 
 function getAttachmentType(attachment = {}) {
@@ -1344,11 +1353,35 @@ function getAttachmentType(attachment = {}) {
   return inferAttachmentTypeFromName(getAttachmentLabel(attachment));
 }
 
-function inferAttachmentTypeFromName(name) {
-  if (/\.(jpe?g|png|gif|webp|heic)(\?|$)/i.test(name)) return "image";
-  if (/\.(mp4|mov|webm|m4v)(\?|$)/i.test(name)) return "video";
-  if (/\.(mp3|ogg|wav|m4a|aac)(\?|$)/i.test(name)) return "audio";
-  return "document";
+function normalizeMediaType(type) {
+  const normalized = String(type || "").trim().toLowerCase();
+  return MEDIA_TYPES.has(normalized) ? normalized : "";
+}
+
+function inferAttachmentTypeFromName(name, fallbackType = "document") {
+  const value = String(name || "").trim().toLowerCase();
+  if (value.startsWith("image/") || /\.(jpe?g|png|gif|webp|heic|heif)([?#].*)?$/i.test(value)) return "image";
+  if (value.startsWith("video/") || /\.(mp4|mov|webm|m4v|3gp|3gpp)([?#].*)?$/i.test(value)) return "video";
+  if (value.startsWith("audio/") || /\.(mp3|ogg|oga|opus|wav|m4a|aac|amr)([?#].*)?$/i.test(value)) return "audio";
+  if (
+    value.startsWith("application/") ||
+    value.startsWith("text/") ||
+    /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|csv|txt|zip|rar)([?#].*)?$/i.test(value)
+  ) {
+    return "document";
+  }
+  if (fallbackType === "") return "";
+  return normalizeMediaType(fallbackType) || "document";
+}
+
+function getMediaFileType(file, fallbackType = "") {
+  if (!file) return normalizeMediaType(fallbackType) || "document";
+  return (
+    inferAttachmentTypeFromName(file.type, "") ||
+    inferAttachmentTypeFromName(file.name, "") ||
+    normalizeMediaType(fallbackType) ||
+    "document"
+  );
 }
 
 function renderMediaPreview(url, type, label) {
@@ -1365,7 +1398,13 @@ function renderMediaPreview(url, type, label) {
     return `<video class="message-media" src="${safeUrl}" controls playsinline preload="metadata"></video>`;
   }
   if (type === "audio") {
-    return `<audio class="message-audio" src="${safeUrl}" controls preload="metadata"></audio>`;
+    return `
+      <div class="message-audio-card">
+        <strong>${safeLabel}</strong>
+        <audio class="message-audio" src="${safeUrl}" controls preload="metadata"></audio>
+        <a class="message-audio-link" href="${safeUrl}" target="_blank" rel="noreferrer noopener" download="${safeLabel}">Abrir o descargar audio</a>
+      </div>
+    `;
   }
   return `<a class="message-file-link" href="${safeUrl}" target="_blank" rel="noreferrer noopener">${safeLabel}</a>`;
 }
@@ -1875,6 +1914,12 @@ document.getElementById("saleForm").addEventListener("submit", handleSaleSubmit)
 document.getElementById("crmTagForm")?.addEventListener("submit", createCrmTag);
 document.getElementById("runFollowups")?.addEventListener("click", runFollowups);
 document.getElementById("openWhatsAppDraft").addEventListener("click", openWhatsAppDraft);
+document.querySelector("#replyForm input[name='mediaFile']")?.addEventListener("change", (event) => {
+  const form = document.getElementById("replyForm");
+  const file = event.currentTarget.files?.[0] || null;
+  if (!form || !file) return;
+  form.elements.mediaType.value = getMediaFileType(file, form.elements.mediaType.value);
+});
 document.getElementById("statusFilter").addEventListener("change", renderPerformance);
 document.getElementById("syncAds").addEventListener("click", syncAdsFromMeta);
 document.getElementById("refreshMetaSetup").addEventListener("click", refreshMetaSetup);
@@ -2023,7 +2068,8 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
   const form = event.currentTarget;
   const text = form.elements.text.value.trim();
   const mediaFile = form.elements.mediaFile.files?.[0] || null;
-  const mediaType = form.elements.mediaType.value;
+  const selectedMediaType = form.elements.mediaType.value;
+  const mediaType = mediaFile ? getMediaFileType(mediaFile, selectedMediaType) : normalizeMediaType(selectedMediaType);
   if (!conversation || (!text && !mediaFile)) return;
   if (conversation.channel === "whatsapp" && !remoteConfig.whatsappSendApiConfigured) {
     openWhatsAppDraft();
@@ -2052,9 +2098,10 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
         name: conversation.name,
         customName: conversation.customName || "",
         text,
-        mediaType,
+        mediaType: uploadedMedia?.type || mediaType,
         mediaId: uploadedMedia?.mediaId || "",
         mediaFilename: uploadedMedia?.filename || mediaFile?.name || "",
+        mediaMimeType: uploadedMedia?.mimeType || mediaFile?.type || "",
       }),
     });
     form.reset();

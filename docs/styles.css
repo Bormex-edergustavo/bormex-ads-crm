@@ -1353,6 +1353,30 @@ textarea:focus {
   width: min(380px, 100%);
 }
 
+.message-audio-card {
+  display: grid;
+  gap: 7px;
+  min-width: min(380px, 100%);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.16);
+  padding: 9px;
+}
+
+.message-audio-card strong {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.message-audio-link {
+  width: fit-content;
+  opacity: 0.86;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .message-file-link {
   display: inline-flex;
   align-items: center;

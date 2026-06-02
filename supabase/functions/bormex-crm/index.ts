@@ -788,28 +788,45 @@ function channelSenderId(channel: string) {
 function normalizeOutgoingMedia(body: any) {
   const url = String(body.mediaUrl || body.media?.url || "").trim();
   const id = String(body.mediaId || body.media?.id || "").trim();
+  const filename = String(body.mediaFilename || body.media?.filename || "").trim();
+  const mimeType = String(body.mediaMimeType || body.media?.mimeType || "").trim();
   const rawType = String(body.mediaType || body.media?.type || "").trim().toLowerCase();
-  const type = ["image", "video", "audio", "document"].includes(rawType) ? rawType : inferMediaType(url);
+  const type = inferMediaType(mimeType) || inferMediaType(filename) || inferMediaType(url) || normalizeMediaType(rawType) || "document";
   return {
     type,
     url,
     id,
-    filename: String(body.mediaFilename || body.media?.filename || "").trim(),
+    filename,
+    mimeType,
   };
 }
 
-function inferMediaType(url: string) {
-  if (/\.(mp4|mov|webm)(\?|$)/i.test(url)) return "video";
-  if (/\.(mp3|ogg|wav|m4a)(\?|$)/i.test(url)) return "audio";
-  if (/\.(pdf|doc|docx|xls|xlsx|ppt|pptx)(\?|$)/i.test(url)) return "document";
-  return "image";
+function normalizeMediaType(value: unknown) {
+  const type = String(value || "").trim().toLowerCase();
+  return ["image", "video", "audio", "document"].includes(type) ? type : "";
+}
+
+function inferMediaType(value: unknown) {
+  const input = String(value || "").trim().toLowerCase();
+  if (!input) return "";
+  if (input.startsWith("image/") || /\.(jpe?g|png|gif|webp|heic|heif)([?#].*)?$/i.test(input)) return "image";
+  if (input.startsWith("video/") || /\.(mp4|mov|webm|m4v|3gp|3gpp)([?#].*)?$/i.test(input)) return "video";
+  if (input.startsWith("audio/") || /\.(mp3|ogg|oga|opus|wav|m4a|aac|amr)([?#].*)?$/i.test(input)) return "audio";
+  if (
+    input.startsWith("application/") ||
+    input.startsWith("text/") ||
+    /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|csv|txt|zip|rar)([?#].*)?$/i.test(input)
+  ) {
+    return "document";
+  }
+  return "";
 }
 
 async function sendWhatsAppText(to: string, textBody: string) {
   return await sendWhatsAppMessage(to, textBody, { type: "", url: "", filename: "" });
 }
 
-async function sendWhatsAppMessage(to: string, textBody: string, media: { type: string; url: string; id?: string; filename?: string }) {
+async function sendWhatsAppMessage(to: string, textBody: string, media: { type: string; url: string; id?: string; filename?: string; mimeType?: string }) {
   const token = whatsappSendAccessToken();
   const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
   if (!token || !phoneNumberId) {
@@ -853,7 +870,7 @@ async function uploadWhatsAppMedia(formData: FormData) {
   const file = formData.get("file");
   if (!(file instanceof File)) throw new HttpError(400, "Selecciona un archivo valido");
   const requestedType = String(formData.get("mediaType") || "").toLowerCase();
-  const mediaType = ["image", "video", "audio", "document"].includes(requestedType) ? requestedType : inferMediaType(file.name || file.type || "");
+  const mediaType = inferMediaType(file.type) || inferMediaType(file.name) || normalizeMediaType(requestedType) || "document";
 
   const graphForm = new FormData();
   graphForm.append("messaging_product", "whatsapp");
