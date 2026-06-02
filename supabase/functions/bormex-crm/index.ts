@@ -69,6 +69,14 @@ Deno.serve(async (req) => {
       return json(extractMetaMessagingEvents(await readJson(req)));
     }
 
+    if (pathname === "/api/meta/subscriptions" && req.method === "GET") {
+      return json(await getMetaSubscriptionDiagnostics());
+    }
+
+    if (pathname === "/api/meta/subscribe" && req.method === "POST") {
+      return json(await subscribeMetaWebhooks());
+    }
+
     if (pathname === "/api/ads-range" && req.method === "POST") {
       return json(await syncMetaAds(await readJson(req)));
     }
@@ -667,6 +675,142 @@ async function handleMetaOAuthCallback(url: URL) {
       : "Meta regreso al CRM, pero no incluyo codigo de autorizacion.";
 
   return text(`${title}\n\n${message}`);
+}
+
+async function getMetaSubscriptionDiagnostics() {
+  const pages = await discoverMetaPages();
+  const whatsappBusinessAccountId = Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID") || "";
+  return {
+    whatsapp: {
+      configured: Boolean(whatsappBusinessAccountId && whatsappAccessToken()),
+      businessAccountId: maskValue(whatsappBusinessAccountId),
+      subscribedApps: whatsappBusinessAccountId && whatsappAccessToken()
+        ? await safeGraphGet(`/${whatsappBusinessAccountId}/subscribed_apps`, whatsappAccessToken())
+        : null,
+    },
+    pages: await Promise.all(
+      pages.map(async (page) => ({
+        id: maskValue(page.id),
+        name: page.name,
+        hasToken: Boolean(page.accessToken),
+        instagramBusinessAccount: page.instagramBusinessAccount
+          ? { id: maskValue(page.instagramBusinessAccount.id), username: page.instagramBusinessAccount.username || "" }
+          : null,
+        subscribedApps: page.accessToken ? await safeGraphGet(`/${page.id}/subscribed_apps`, page.accessToken) : null,
+      })),
+    ),
+    configuredIds: {
+      messengerPageId: maskValue(messengerPageId()),
+      instagramAccountId: maskValue(instagramAccountId()),
+    },
+  };
+}
+
+async function subscribeMetaWebhooks() {
+  const results = [];
+  const whatsappBusinessAccountId = Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID") || "";
+  if (whatsappBusinessAccountId && whatsappAccessToken()) {
+    results.push({
+      channel: "whatsapp",
+      target: maskValue(whatsappBusinessAccountId),
+      result: await safeGraphPost(`/${whatsappBusinessAccountId}/subscribed_apps`, whatsappAccessToken(), {
+        subscribed_fields: "messages,history,smb_app_state_sync,smb_message_echoes,account_update",
+      }),
+    });
+  } else {
+    results.push({ channel: "whatsapp", target: "", result: { ok: false, error: "Falta WHATSAPP_BUSINESS_ACCOUNT_ID o token de WhatsApp" } });
+  }
+
+  const pages = await discoverMetaPages();
+  for (const page of pages) {
+    if (!page.accessToken) {
+      results.push({ channel: "messenger_instagram", target: maskValue(page.id), result: { ok: false, error: "No hay page access token para suscribir la pagina" } });
+      continue;
+    }
+    results.push({
+      channel: "messenger_instagram",
+      target: maskValue(page.id),
+      name: page.name,
+      instagramBusinessAccount: page.instagramBusinessAccount
+        ? { id: maskValue(page.instagramBusinessAccount.id), username: page.instagramBusinessAccount.username || "" }
+        : null,
+      result: await safeGraphPost(`/${page.id}/subscribed_apps`, page.accessToken, {
+        subscribed_fields: "messages,message_echoes,messaging_postbacks,messaging_referrals,message_reads,message_deliveries,messaging_seen",
+      }),
+    });
+  }
+  if (!pages.length) {
+    results.push({ channel: "messenger_instagram", target: "", result: { ok: false, error: "No encontre paginas con el token actual" } });
+  }
+
+  return {
+    ok: results.some((item) => item.result?.ok !== false),
+    results,
+    nextCheck: "/api/meta/subscriptions",
+  };
+}
+
+async function discoverMetaPages() {
+  const explicitPageId = messengerPageId();
+  const explicitToken = messengerAccessToken();
+  const pages = new Map<string, { id: string; name: string; accessToken: string; instagramBusinessAccount?: { id: string; username?: string } }>();
+
+  if (explicitPageId) {
+    const pageInfo = explicitToken ? await safeGraphGet(`/${explicitPageId}?fields=id,name,instagram_business_account{id,username}`, explicitToken) : null;
+    pages.set(explicitPageId, {
+      id: explicitPageId,
+      name: typeof pageInfo?.name === "string" ? pageInfo.name : "Pagina configurada",
+      accessToken: explicitToken,
+      instagramBusinessAccount: pageInfo?.instagram_business_account,
+    });
+  }
+
+  for (const token of uniqueTokens([messengerAccessToken(), instagramAccessToken(), metaAdsAccessToken()])) {
+    const payload = await safeGraphGet("/me/accounts?fields=id,name,access_token,instagram_business_account{id,username}&limit=100", token);
+    for (const page of payload?.data || []) {
+      if (!page?.id) continue;
+      pages.set(String(page.id), {
+        id: String(page.id),
+        name: String(page.name || "Pagina"),
+        accessToken: String(page.access_token || token),
+        instagramBusinessAccount: page.instagram_business_account,
+      });
+    }
+  }
+
+  return [...pages.values()];
+}
+
+function uniqueTokens(tokens: string[]) {
+  return [...new Set(tokens.filter(Boolean))];
+}
+
+async function safeGraphGet(path: string, token: string) {
+  try {
+    return await graphRequest(path, token, "GET");
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Error Graph API" };
+  }
+}
+
+async function safeGraphPost(path: string, token: string, params: Record<string, string>) {
+  try {
+    const payload = await graphRequest(path, token, "POST", params);
+    return { ok: true, payload };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Error Graph API" };
+  }
+}
+
+async function graphRequest(path: string, token: string, method: "GET" | "POST", params: Record<string, string> = {}) {
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  const url = new URL(`https://graph.facebook.com/${graphVersion()}${cleanPath}`);
+  url.searchParams.set("access_token", token);
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  const response = await fetch(url.toString(), { method });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error?.message || `Graph API respondio ${response.status}`);
+  return payload;
 }
 
 function extractWhatsAppEvents(payload: any) {
