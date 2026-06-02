@@ -104,7 +104,7 @@ Deno.serve(async (req) => {
       const message = await sendCrmMessage(body);
       await upsertItems("conversations", [message.conversation]);
       await upsertItems("messages", [message.record]);
-      return json(await readDb());
+      return json(filterStateForRole(await readDb(), accessRole));
     }
 
     if (pathname === "/api/media/whatsapp" && req.method === "POST") {
@@ -324,6 +324,12 @@ function isPathAllowed(pathname: string, method: string, role: string) {
   if (role !== "sales") return false;
   if (method === "GET" && ["/", "/index.html", "/styles.css", "/app.js", "/privacy.html"].includes(pathname)) return true;
   if (method === "GET" && ["/api/config", "/api/state"].includes(pathname)) return true;
+  if (method === "GET" && pathname.startsWith("/api/media/whatsapp/")) return true;
+  if (method === "POST" && pathname === "/api/messages") return true;
+  if (method === "POST" && pathname === "/api/media/whatsapp") return true;
+  if (method === "POST" && pathname.startsWith("/api/conversations/")) return true;
+  if (method === "POST" && pathname === "/api/crm-tags") return true;
+  if (method === "POST" && pathname === "/api/followups/run") return true;
   if (method === "POST" && pathname === "/api/sales") return true;
   if (method === "DELETE" && pathname.startsWith("/api/sales/")) return true;
   if (method === "DELETE" && pathname.startsWith("/api/records/sales/")) return true;
@@ -334,7 +340,10 @@ function filterStateForRole(db: typeof defaultDb, role: string) {
   if (role !== "sales") return db;
   return {
     ...structuredClone(defaultDb),
+    conversations: db.conversations || [],
+    messages: db.messages || [],
     sales: db.sales || [],
+    crmTags: db.crmTags || defaultDb.crmTags,
     rules: db.rules || defaultDb.rules,
   };
 }

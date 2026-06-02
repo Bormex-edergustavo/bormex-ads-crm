@@ -77,6 +77,10 @@ function isSalesRole() {
   return accessRole === "sales";
 }
 
+function isSalesRoleViewAllowed(view) {
+  return !isSalesRole() || ["crm", "sales"].includes(view);
+}
+
 function addDays(dateValue, days) {
   const date = new Date(`${dateValue}T12:00:00`);
   date.setDate(date.getDate() + days);
@@ -1011,7 +1015,7 @@ function fillRules() {
 }
 
 function setView(view) {
-  if (isSalesRole() && view !== "sales") view = "sales";
+  if (!isSalesRoleViewAllowed(view)) view = "sales";
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === view);
   });
@@ -1032,14 +1036,14 @@ function applyRoleAccess() {
   const salesOnly = isSalesRole();
   document.body.dataset.role = accessRole || "unknown";
   document.querySelectorAll(".nav-item").forEach((button) => {
-    button.hidden = salesOnly && button.dataset.view !== "sales";
+    button.hidden = salesOnly && !["crm", "sales"].includes(button.dataset.view);
   });
   document.getElementById("exportJson").hidden = salesOnly;
   document.getElementById("clearDemoData").hidden = salesOnly;
-  document.getElementById("roleBadge").textContent = salesOnly ? "Ventas" : "Ads";
+  document.getElementById("roleBadge").textContent = salesOnly ? "Ventas + CRM" : "Ads";
   if (salesOnly) {
     const activeView = document.querySelector(".nav-item.active")?.dataset.view || "sales";
-    if (activeView !== "sales") setView("sales");
+    if (!isSalesRoleViewAllowed(activeView)) setView("sales");
   }
 }
 
