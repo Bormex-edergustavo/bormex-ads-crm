@@ -1023,8 +1023,6 @@ function renderCrm() {
   const activeTags = conversationTags(active);
   const activeTagIds = new Set(conversationTagIds(active));
   const availableTags = getCrmTags().filter((tag) => !activeTagIds.has(tag.id));
-  const followUpTag = activeTags.find(isFollowUpTag);
-  const suggestedFollowUpAt = active.followUpAt || (followUpTag ? addDays(today(), Number(followUpTag.followUpDays || 3)) : "");
   const messages = [...(state.messages || [])]
     .filter((message) => message.conversationId === activeConversationId)
     .sort((a, b) => new Date(a.at || 0) - new Date(b.at || 0));
@@ -1064,17 +1062,6 @@ function renderCrm() {
           <button class="secondary-button compact" data-add-conversation-tag type="button" ${availableTags.length ? "" : "disabled"}>Agregar</button>
         </div>
       </div>
-      <form class="conversation-ad-form" data-conversation-ad-form>
-        <input name="adId" list="adIdOptions" placeholder="ID anuncio" value="${escapeHtml(activeAttribution?.adId || "")}" />
-        <input name="adName" placeholder="Nombre anuncio" value="${escapeHtml(activeAttribution?.ad || "")}" />
-        <button class="secondary-button compact" type="submit">Guardar anuncio</button>
-      </form>
-      <form class="followup-form" data-followup-form>
-        <input name="followUpAt" type="date" value="${escapeHtml(suggestedFollowUpAt)}" />
-        <input name="followUpContact" inputmode="tel" placeholder="Avisar a WhatsApp" value="${escapeHtml(active.followUpContact || followUpTag?.notifyPhone || "")}" />
-        <input name="followUpNote" placeholder="Nota de retro" value="${escapeHtml(active.followUpNote || "")}" />
-        <button class="secondary-button compact" type="submit">Guardar retro</button>
-      </form>
     </div>
   `;
 
@@ -1603,8 +1590,8 @@ document.querySelectorAll("[data-open-sale]").forEach((button) => {
 });
 
 document.getElementById("saleForm").addEventListener("submit", handleSaleSubmit);
-document.getElementById("crmTagForm").addEventListener("submit", createCrmTag);
-document.getElementById("runFollowups").addEventListener("click", runFollowups);
+document.getElementById("crmTagForm")?.addEventListener("submit", createCrmTag);
+document.getElementById("runFollowups")?.addEventListener("click", runFollowups);
 document.getElementById("openWhatsAppDraft").addEventListener("click", openWhatsAppDraft);
 document.getElementById("statusFilter").addEventListener("change", renderPerformance);
 document.getElementById("syncAds").addEventListener("click", syncAdsFromMeta);

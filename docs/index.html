@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
     <title>Bormex Ads CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20260602-crm-sendfix" />
+    <link rel="stylesheet" href="styles.css?v=20260602-crm-compact" />
   </head>
   <body>
     <div class="app-shell">
@@ -166,25 +166,6 @@
                 </select>
               </div>
               <input id="crmSearch" class="crm-search" placeholder="Buscar nombre, número o anuncio" />
-              <div class="connection-panel compact">
-                <span class="connection-dot pending" id="inboxConnectionDot"></span>
-                <div>
-                  <strong>Inbox mixto</strong>
-                  <p id="inboxConnectionText">Esperando estado del backend.</p>
-                </div>
-              </div>
-              <form class="crm-tag-form" id="crmTagForm">
-                <input name="name" placeholder="Nueva etiqueta" required />
-                <select name="action" aria-label="Acción">
-                  <option value="none">Normal</option>
-                  <option value="sale">Pago / venta</option>
-                  <option value="followup">Seguimiento</option>
-                </select>
-                <input name="followUpDays" type="number" min="0" step="1" placeholder="Días" />
-                <input name="notifyPhone" inputmode="tel" placeholder="Avisar a WhatsApp" />
-                <button class="secondary-button compact" type="submit">Crear</button>
-              </form>
-              <button class="secondary-button compact" id="runFollowups" type="button">Enviar avisos vencidos</button>
               <div class="conversation-list" id="conversationList"></div>
             </div>
 
@@ -452,7 +433,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=20260602-crm-sendfix"></script>
+    <script src="app.js?v=20260602-crm-compact"></script>
     <script>
       window.lucide?.createIcons();
     </script>
