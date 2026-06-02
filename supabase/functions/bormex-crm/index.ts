@@ -1331,7 +1331,7 @@ function metaEmbeddedSignupConfigId() {
     Deno.env.get("WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID") ||
     Deno.env.get("WHATSAPP_BUSINESS_APP_ONBOARDING_CONFIG_ID") ||
     Deno.env.get("META_LOGIN_CONFIG_ID") ||
-    ""
+    "937228176021764"
   );
 }
 
