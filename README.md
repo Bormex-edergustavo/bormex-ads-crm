@@ -6,6 +6,8 @@ Dashboard para registrar ventas de WhatsApp y atribuirlas a anuncios por numero 
 
 - Panel publico: https://bormex-edergustavo.github.io/bormex-ads-crm/
 - Backend Supabase Edge Function: https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm
+- Webhook WhatsApp: https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm/webhooks/whatsapp
+- Webhook Messenger/Instagram: https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm/webhooks/meta
 - El panel pide un codigo configurado en los secretos del backend.
 - La sincronizacion de Meta Ads corre cada 15 minutos con `pg_cron` en Supabase.
 - Las ventas, leads, mensajes, anuncios y gasto se guardan en tablas `bormex_*` dentro de Supabase.
@@ -48,6 +50,7 @@ Para conservar WhatsApp Business App y WhatsApp Web, no registres el numero con 
 - `META_EMBEDDED_SIGNUP_CONFIG_ID`: configuracion de Facebook Login for Business para `whatsapp_business_app_onboarding`.
 - `META_AD_ACCOUNT_ID`: cuenta publicitaria, por ejemplo `act_...`.
 - `META_WEBHOOK_VERIFY_TOKEN`: token privado opcional para verificar webhooks de Meta; si no existe usa `WHATSAPP_VERIFY_TOKEN`.
+- `META_APP_SECRET`: secreto de la app de Meta para validar `X-Hub-Signature-256` en webhooks entrantes.
 - `WHATSAPP_VERIFY_TOKEN`: token privado para verificar el webhook de Meta.
 - `WHATSAPP_PHONE_NUMBER_ID`: numero de WhatsApp Business Platform.
 - `WHATSAPP_BUSINESS_ACCOUNT_ID`: cuenta de WhatsApp Business.

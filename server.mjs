@@ -1,4 +1,5 @@
 import http from "node:http";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync, createReadStream, readFileSync } from "node:fs";
 import { extname, join } from "node:path";
@@ -62,6 +63,7 @@ const server = http.createServer(async (req, res) => {
         whatsappPhoneConfigured: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID),
         whatsappApiConfigured: Boolean(whatsappAccessToken() && process.env.WHATSAPP_PHONE_NUMBER_ID),
         whatsappCoexistenceReady: Boolean(metaWebhookVerifyToken() && whatsappAccessToken() && process.env.WHATSAPP_PHONE_NUMBER_ID),
+        webhookSignatureConfigured: Boolean(metaAppSecret()),
         messengerWebhookConfigured: Boolean(metaWebhookVerifyToken()),
         messengerApiConfigured: Boolean(messengerAccessToken()),
         messengerPageConfigured: Boolean(messengerPageId()),
@@ -85,6 +87,7 @@ const server = http.createServer(async (req, res) => {
         whatsappPhoneConfigured: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID),
         whatsappApiConfigured: Boolean(whatsappAccessToken() && process.env.WHATSAPP_PHONE_NUMBER_ID),
         whatsappCoexistenceReady: Boolean(metaWebhookVerifyToken() && whatsappAccessToken() && process.env.WHATSAPP_PHONE_NUMBER_ID),
+        webhookSignatureConfigured: Boolean(metaAppSecret()),
         messengerWebhookConfigured: Boolean(metaWebhookVerifyToken()),
         messengerApiConfigured: Boolean(messengerAccessToken()),
         messengerPageConfigured: Boolean(messengerPageId()),
@@ -191,7 +194,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/webhooks/whatsapp" && req.method === "POST") {
-      const body = await readJson(req);
+      const body = await readVerifiedMetaJson(req);
       const db = await readDb();
       const payload = extractWhatsAppEvents(body);
       db.leads = upsertLeads(db.leads, payload.leads);
@@ -207,7 +210,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/webhooks/meta" && req.method === "POST") {
-      const body = await readJson(req);
+      const body = await readVerifiedMetaJson(req);
       const db = await readDb();
       const payload = extractMetaMessagingEvents(body);
       db.conversations = upsertById(db.conversations, payload.conversations);
@@ -220,9 +223,16 @@ const server = http.createServer(async (req, res) => {
     return serveStatic(url.pathname, res);
   } catch (error) {
     console.error(error);
-    return json(res, { error: error.message || "Error interno" }, 500);
+    return json(res, { error: error.message || "Error interno" }, error.status || 500);
   }
 });
+
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
 
 server.listen(PORT, HOST, () => {
   console.log(`Ventas Ads listo en http://${HOST}:${PORT}`);
@@ -312,6 +322,10 @@ function metaAdsAccessToken() {
 
 function metaWebhookVerifyToken() {
   return process.env.META_WEBHOOK_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN || "";
+}
+
+function metaAppSecret() {
+  return process.env.META_APP_SECRET || process.env.FACEBOOK_APP_SECRET || "";
 }
 
 function whatsappAccessToken() {
@@ -1055,10 +1069,42 @@ function timestampToIso(value) {
 }
 
 async function readJson(req) {
+  const text = await readTextBody(req);
+  return text ? JSON.parse(text) : {};
+}
+
+async function readVerifiedMetaJson(req) {
+  const text = await readTextBody(req);
+  verifyMetaSignature(req, text);
+  return text ? JSON.parse(text) : {};
+}
+
+async function readTextBody(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
-  const text = Buffer.concat(chunks).toString("utf8");
-  return text ? JSON.parse(text) : {};
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function verifyMetaSignature(req, rawBody) {
+  const secret = metaAppSecret();
+  if (!secret) return;
+
+  const signature = req.headers["x-hub-signature-256"] || "";
+  const prefix = "sha256=";
+  if (!signature.startsWith(prefix)) {
+    throw new HttpError(403, "Firma de Meta faltante");
+  }
+
+  const expectedHex = signature.slice(prefix.length);
+  if (!/^[a-f0-9]+$/i.test(expectedHex) || expectedHex.length % 2 !== 0) {
+    throw new HttpError(403, "Firma de Meta invalida");
+  }
+
+  const expected = Buffer.from(expectedHex, "hex");
+  const actual = createHmac("sha256", secret).update(rawBody).digest();
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+    throw new HttpError(403, "Firma de Meta no coincide");
+  }
 }
 
 function serveStatic(pathname, res) {

@@ -215,7 +215,8 @@ function renderConnectionStatus(config, remoteState, coexistenceSetup = null) {
       config.messengerApiConfigured ? "Messenger" : "",
       config.instagramApiConfigured ? "Instagram" : "",
     ].filter(Boolean);
-    inboxText.textContent = `Entrada: ${inbound.join(", ") || "pendiente"}. Respuesta CRM: ${outbound.join(", ") || "pendiente"}. Último evento: ${remoteState.lastWebhookAt || "todavía ninguno"}.`;
+    const signature = config.webhookSignatureConfigured ? "Firma: activa" : "Firma: pendiente";
+    inboxText.textContent = `Entrada: ${inbound.join(", ") || "pendiente"}. Respuesta CRM: ${outbound.join(", ") || "pendiente"}. ${signature}. Último evento: ${remoteState.lastWebhookAt || "todavía ninguno"}.`;
   }
 
   if (syncButton) syncButton.disabled = !config.metaAdsConfigured;

@@ -862,6 +862,24 @@ textarea:focus {
   line-height: 1.5;
 }
 
+.connection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.connection-note {
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.primary-button[aria-disabled="true"] {
+  pointer-events: none;
+  opacity: 0.58;
+  filter: grayscale(0.2);
+}
+
 .connection-dot {
   flex: 0 0 auto;
   width: 11px;

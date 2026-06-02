@@ -159,7 +159,7 @@ Deno.serve(async (req) => {
     }
 
     if (pathname === "/webhooks/whatsapp" && req.method === "POST") {
-      const body = await readJson(req);
+      const body = await readVerifiedMetaJson(req);
       const payload = extractWhatsAppEvents(body);
       await upsertItems("leads", payload.leads);
       await upsertItems("conversations", payload.conversations);
@@ -174,7 +174,7 @@ Deno.serve(async (req) => {
     }
 
     if (pathname === "/webhooks/meta" && req.method === "POST") {
-      const body = await readJson(req);
+      const body = await readVerifiedMetaJson(req);
       const payload = extractMetaMessagingEvents(body);
       await upsertItems("conversations", payload.conversations);
       await upsertItems("messages", payload.messages);
@@ -186,9 +186,19 @@ Deno.serve(async (req) => {
     return text("Not found", 404);
   } catch (error) {
     console.error(error);
-    return json({ error: error instanceof Error ? error.message : "Error interno" }, 500);
+    const status = error instanceof HttpError ? error.status : 500;
+    return json({ error: error instanceof Error ? error.message : "Error interno" }, status);
   }
 });
+
+class HttpError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
 
 function frontendRedirectHtml() {
   const frontendUrl = Deno.env.get("BORMEX_FRONTEND_URL") || "https://bormex-edergustavo.github.io/bormex-ads-crm/";
@@ -220,6 +230,7 @@ function configPayload(role = "") {
     whatsappApiConfigured: Boolean(whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappCoexistenceReady: Boolean(metaWebhookVerifyToken() && whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappCoexistenceOnboardingConfigured: Boolean(metaAppId() && metaEmbeddedSignupConfigId()),
+    webhookSignatureConfigured: Boolean(metaAppSecret()),
     messengerWebhookConfigured: Boolean(metaWebhookVerifyToken()),
     messengerApiConfigured: Boolean(messengerAccessToken()),
     messengerPageConfigured: Boolean(messengerPageId()),
@@ -1341,6 +1352,10 @@ function metaWebhookVerifyToken() {
   return Deno.env.get("META_WEBHOOK_VERIFY_TOKEN") || Deno.env.get("WHATSAPP_VERIFY_TOKEN") || "";
 }
 
+function metaAppSecret() {
+  return Deno.env.get("META_APP_SECRET") || Deno.env.get("FACEBOOK_APP_SECRET") || "";
+}
+
 function metaAdsAccessToken() {
   return Deno.env.get("META_ADS_ACCESS_TOKEN") || Deno.env.get("META_ACCESS_TOKEN") || "";
 }
@@ -1417,6 +1432,57 @@ function summarizeWebhookPayload(body: any) {
 async function readJson(req: Request) {
   const textBody = await req.text();
   return textBody ? JSON.parse(textBody) : {};
+}
+
+async function readVerifiedMetaJson(req: Request) {
+  const textBody = await req.text();
+  await verifyMetaSignature(req, textBody);
+  return textBody ? JSON.parse(textBody) : {};
+}
+
+async function verifyMetaSignature(req: Request, rawBody: string) {
+  const secret = metaAppSecret();
+  if (!secret) return;
+
+  const signature = req.headers.get("x-hub-signature-256") || "";
+  const prefix = "sha256=";
+  if (!signature.startsWith(prefix)) {
+    throw new HttpError(403, "Firma de Meta faltante");
+  }
+
+  const expected = hexToBytes(signature.slice(prefix.length));
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signed = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody));
+  const actual = new Uint8Array(signed);
+  if (!constantTimeEqual(actual, expected)) {
+    throw new HttpError(403, "Firma de Meta no coincide");
+  }
+}
+
+function hexToBytes(hex: string) {
+  if (!/^[a-f0-9]+$/i.test(hex) || hex.length % 2 !== 0) {
+    throw new HttpError(403, "Firma de Meta invalida");
+  }
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let index = 0; index < hex.length; index += 2) {
+    bytes[index / 2] = Number.parseInt(hex.slice(index, index + 2), 16);
+  }
+  return bytes;
+}
+
+function constantTimeEqual(actual: Uint8Array, expected: Uint8Array) {
+  if (actual.length !== expected.length) return false;
+  let diff = 0;
+  for (let index = 0; index < actual.length; index += 1) {
+    diff |= actual[index] ^ expected[index];
+  }
+  return diff === 0;
 }
 
 function html(payload: string, status = 200) {
