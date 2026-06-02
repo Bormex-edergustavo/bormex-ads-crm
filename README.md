@@ -44,6 +44,8 @@ Para conservar WhatsApp Business App y WhatsApp Web, no registres el numero con 
 - `INSTAGRAM_ACCESS_TOKEN`: token de cuenta profesional de Instagram con permiso de mensajes.
 - `INSTAGRAM_ACCOUNT_ID`: cuenta profesional de Instagram que recibe/responde DMs.
 - `META_ACCESS_TOKEN`: token heredado opcional; se usa como respaldo si no existen los dos tokens separados.
+- `META_APP_ID`: app de Meta usada para abrir el flujo de Coexistence.
+- `META_EMBEDDED_SIGNUP_CONFIG_ID`: configuracion de Facebook Login for Business para `whatsapp_business_app_onboarding`.
 - `META_AD_ACCOUNT_ID`: cuenta publicitaria, por ejemplo `act_...`.
 - `META_WEBHOOK_VERIFY_TOKEN`: token privado opcional para verificar webhooks de Meta; si no existe usa `WHATSAPP_VERIFY_TOKEN`.
 - `WHATSAPP_VERIFY_TOKEN`: token privado para verificar el webhook de Meta.

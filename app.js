@@ -151,7 +151,11 @@ function hideAuthGate() {
 
 async function syncFromServer() {
   try {
-    const [config, remoteState] = await Promise.all([api("/api/config"), api("/api/state")]);
+    const [config, remoteState, coexistenceSetup] = await Promise.all([
+      api("/api/config"),
+      api("/api/state"),
+      api("/api/meta/coexistence").catch(() => null),
+    ]);
     serverAvailable = true;
     accessRole = config.role || roleFromCode(panelCode) || accessRole;
     state.conversations = remoteState.conversations || state.conversations;
@@ -162,7 +166,7 @@ async function syncFromServer() {
     state.ads = remoteState.ads || state.ads;
     state.campaignPeriods = remoteState.campaignPeriods || state.campaignPeriods;
     state.rules = remoteState.rules || state.rules;
-    renderConnectionStatus(config, remoteState);
+    renderConnectionStatus(config, remoteState, coexistenceSetup);
     saveState();
   } catch {
     serverAvailable = false;
@@ -170,13 +174,15 @@ async function syncFromServer() {
   }
 }
 
-function renderConnectionStatus(config, remoteState) {
+function renderConnectionStatus(config, remoteState, coexistenceSetup = null) {
   const dots = document.querySelectorAll(".connection-dot");
   const inboxDot = document.getElementById("inboxConnectionDot");
   const whatsappDot = document.getElementById("whatsappConnectionDot");
   const adsDot = document.getElementById("adsConnectionDot");
   const inboxText = document.getElementById("inboxConnectionText");
   const whatsappText = document.getElementById("whatsappConnectionText");
+  const coexistenceLink = document.getElementById("whatsappCoexistenceLink");
+  const coexistenceText = document.getElementById("whatsappCoexistenceText");
   const adsText = document.getElementById("adsConnectionText");
   const syncButton = document.getElementById("syncAds");
   const setConnected = (dot, connected) => {
@@ -189,6 +195,8 @@ function renderConnectionStatus(config, remoteState) {
   if (!serverAvailable) {
     if (inboxText) inboxText.textContent = "No pude conectar con el backend del inbox.";
     if (whatsappText) whatsappText.textContent = "No pude conectar con el backend. Revisa internet o intenta recargar el panel.";
+    if (coexistenceLink) setCoexistenceLink(coexistenceLink, "");
+    if (coexistenceText) coexistenceText.textContent = "No pude revisar el flujo de Coexistence.";
     if (adsText) adsText.textContent = "No pude conectar con el backend para sincronizar anuncios activos desde Meta Ads API.";
     if (syncButton) syncButton.disabled = true;
     return;
@@ -222,6 +230,7 @@ function renderConnectionStatus(config, remoteState) {
     setConnected(whatsappDot, false);
     if (whatsappText) whatsappText.textContent = "Falta META_WEBHOOK_VERIFY_TOKEN o WHATSAPP_VERIFY_TOKEN para verificar el webhook de Meta.";
   }
+  renderCoexistenceSetup(coexistenceSetup, coexistenceLink, coexistenceText);
 
   if (config.metaAdsConfigured) {
     setConnected(adsDot, true);
@@ -232,6 +241,40 @@ function renderConnectionStatus(config, remoteState) {
   } else {
     setConnected(adsDot, false);
     if (adsText) adsText.textContent = "Faltan META_ACCESS_TOKEN y META_AD_ACCOUNT_ID en .env para leer anuncios activos.";
+  }
+}
+
+function renderCoexistenceSetup(setup, link, text) {
+  if (!link && !text) return;
+  if (!setup) {
+    if (link) setCoexistenceLink(link, "");
+    if (text) text.textContent = "No pude revisar la configuración de Coexistence en este momento.";
+    return;
+  }
+  if (setup.connectable && setup.onboardingUrl) {
+    if (link) setCoexistenceLink(link, setup.onboardingUrl);
+    if (text) {
+      const callback = setup.lastMetaOAuthCallback?.hasCode
+        ? ` Último regreso de Meta: ${setup.lastMetaOAuthCallback.at || "recibido"}.`
+        : "";
+      text.textContent = `Listo para abrir el flujo oficial de WhatsApp Business App Coexistence. No migra ni desregistra el número.${callback}`;
+    }
+    return;
+  }
+  if (link) setCoexistenceLink(link, "");
+  if (text) {
+    text.textContent = `Falta configurar ${setup.missing?.join(", ") || "Embedded Signup"} en los secretos de Supabase antes de abrir Coexistence.`;
+  }
+}
+
+function setCoexistenceLink(link, href) {
+  if (!link) return;
+  if (href) {
+    link.href = href;
+    link.setAttribute("aria-disabled", "false");
+  } else {
+    link.href = "#";
+    link.setAttribute("aria-disabled", "true");
   }
 }
 
@@ -268,6 +311,27 @@ async function syncAdsFromMeta() {
     if (rangeButton) {
       rangeButton.textContent = "Actualizar rango";
       rangeButton.disabled = false;
+    }
+  }
+}
+
+async function refreshMetaSetup() {
+  const button = document.getElementById("refreshMetaSetup");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Revisando...";
+  }
+  try {
+    await api("/api/meta/subscribe", { method: "POST" });
+    await syncFromServer();
+    render();
+    toast("Meta revisado y webhooks suscritos");
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Revisar Meta";
     }
   }
 }
@@ -1142,6 +1206,7 @@ document.querySelectorAll("[data-open-sale]").forEach((button) => {
 document.getElementById("saleForm").addEventListener("submit", handleSaleSubmit);
 document.getElementById("statusFilter").addEventListener("change", renderPerformance);
 document.getElementById("syncAds").addEventListener("click", syncAdsFromMeta);
+document.getElementById("refreshMetaSetup").addEventListener("click", refreshMetaSetup);
 
 document.addEventListener("click", (event) => {
   const conversationButton = event.target.closest("[data-conversation-id]");

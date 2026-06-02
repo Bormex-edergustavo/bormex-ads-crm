@@ -73,6 +73,10 @@ Deno.serve(async (req) => {
       return json(await getMetaSubscriptionDiagnostics());
     }
 
+    if (pathname === "/api/meta/coexistence" && req.method === "GET") {
+      return json(await getMetaCoexistenceSetup(url));
+    }
+
     if (pathname === "/api/meta/subscribe" && req.method === "POST") {
       return json(await subscribeMetaWebhooks(url));
     }
@@ -215,6 +219,7 @@ function configPayload(role = "") {
     whatsappPhoneConfigured: Boolean(Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappApiConfigured: Boolean(whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappCoexistenceReady: Boolean(metaWebhookVerifyToken() && whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
+    whatsappCoexistenceOnboardingConfigured: Boolean(metaAppId() && metaEmbeddedSignupConfigId()),
     messengerWebhookConfigured: Boolean(metaWebhookVerifyToken()),
     messengerApiConfigured: Boolean(messengerAccessToken()),
     messengerPageConfigured: Boolean(messengerPageId()),
@@ -681,6 +686,7 @@ async function getMetaSubscriptionDiagnostics() {
   const pages = await discoverMetaPages();
   const whatsappBusinessAccountId = Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID") || "";
   const whatsappToken = whatsappAccessToken();
+  const settings = await readSettings();
   return {
     whatsapp: {
       configured: Boolean(whatsappBusinessAccountId && whatsappToken),
@@ -708,6 +714,70 @@ async function getMetaSubscriptionDiagnostics() {
       messengerPageId: maskValue(messengerPageId()),
       instagramAccountId: maskValue(instagramAccountId()),
     },
+    lastMetaOAuthCallback: sanitizeMetaOAuthCallback(settings.lastMetaOAuthCallback),
+  };
+}
+
+async function getMetaCoexistenceSetup(requestUrl: URL) {
+  const appId = metaAppId();
+  const configId = metaEmbeddedSignupConfigId();
+  const callbackUrl = metaOAuthRedirectUrl(requestUrl);
+  const missing = [
+    appId ? "" : "META_APP_ID",
+    configId ? "" : "META_EMBEDDED_SIGNUP_CONFIG_ID",
+  ].filter(Boolean);
+  const settings = await readSettings();
+  const onboardingUrl = appId && configId ? buildWhatsAppBusinessAppOnboardingUrl(appId, configId, callbackUrl) : "";
+
+  return {
+    connectable: Boolean(onboardingUrl),
+    appIdConfigured: Boolean(appId),
+    configIdConfigured: Boolean(configId),
+    missing,
+    feature: "whatsapp_business_app_onboarding",
+    callbackUrl,
+    onboardingUrl,
+    safety: "Usa Coexistence oficial. No migra ni desregistra el numero de WhatsApp Business App.",
+    lastMetaOAuthCallback: sanitizeMetaOAuthCallback(settings.lastMetaOAuthCallback),
+  };
+}
+
+function buildWhatsAppBusinessAppOnboardingUrl(appId: string, configId: string, callbackUrl: string) {
+  const url = new URL(`https://www.facebook.com/${graphVersion()}/dialog/oauth`);
+  url.searchParams.set("client_id", appId);
+  url.searchParams.set("redirect_uri", callbackUrl);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("config_id", configId);
+  url.searchParams.set("scope", Deno.env.get("META_ONBOARDING_SCOPES") || "whatsapp_business_management,whatsapp_business_messaging,business_management");
+  url.searchParams.set(
+    "extras",
+    JSON.stringify({
+      feature: "whatsapp_business_app_onboarding",
+      sessionInfoVersion: "3",
+      setup: {
+        external_business_id: Deno.env.get("META_EXTERNAL_BUSINESS_ID") || "bormex-ads-crm",
+      },
+    }),
+  );
+  return url.toString();
+}
+
+function metaOAuthRedirectUrl(requestUrl: URL) {
+  return Deno.env.get("META_OAUTH_REDIRECT_URI") || absoluteWebhookUrl(requestUrl, "/oauth/meta");
+}
+
+function sanitizeMetaOAuthCallback(value: any) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    at: value.at || "",
+    hasCode: Boolean(value.hasCode),
+    codeLength: Number(value.codeLength || 0),
+    error: value.error || "",
+    errorDescription: value.errorDescription || "",
+    businessId: maskValue(String(value.business_id || "")),
+    wabaId: maskValue(String(value.waba_id || "")),
+    phoneNumberId: maskValue(String(value.phone_number_id || "")),
+    state: value.state ? "recibido" : "",
   };
 }
 
@@ -1238,6 +1308,20 @@ function centsToMoney(value: unknown) {
 
 function graphVersion() {
   return Deno.env.get("META_GRAPH_VERSION") || "v25.0";
+}
+
+function metaAppId() {
+  return Deno.env.get("META_APP_ID") || Deno.env.get("FACEBOOK_APP_ID") || Deno.env.get("WHATSAPP_APP_ID") || Deno.env.get("META_CLIENT_ID") || "";
+}
+
+function metaEmbeddedSignupConfigId() {
+  return (
+    Deno.env.get("META_EMBEDDED_SIGNUP_CONFIG_ID") ||
+    Deno.env.get("WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID") ||
+    Deno.env.get("WHATSAPP_BUSINESS_APP_ONBOARDING_CONFIG_ID") ||
+    Deno.env.get("META_LOGIN_CONFIG_ID") ||
+    ""
+  );
 }
 
 function metaWebhookVerifyToken() {
