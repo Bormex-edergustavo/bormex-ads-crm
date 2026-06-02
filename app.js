@@ -1105,10 +1105,17 @@ function getConversationSearchText(conversation) {
 
 function getConversationRows() {
   const channelFilter = document.getElementById("crmChannelFilter")?.value || "all";
+  const unreadFilter = document.getElementById("crmUnreadFilter")?.value || "all";
   const tagFilter = document.getElementById("crmTagFilter")?.value || "all";
   const query = (document.getElementById("crmSearch")?.value || "").trim().toLowerCase();
   return [...(state.conversations || [])]
     .filter((conversation) => channelFilter === "all" || conversation.channel === channelFilter)
+    .filter((conversation) => {
+      const unreadCount = Math.max(0, Number(conversation.unread || 0));
+      if (unreadFilter === "unread") return unreadCount > 0;
+      if (unreadFilter === "read") return unreadCount === 0;
+      return true;
+    })
     .filter((conversation) => {
       if (tagFilter === "all") return true;
       const tagIds = conversationTagIds(conversation);
@@ -2035,6 +2042,10 @@ document.getElementById("exportSpendCsv").addEventListener("click", () => {
 
 document.getElementById("importCsv").addEventListener("click", importCsv);
 document.getElementById("crmChannelFilter").addEventListener("change", () => {
+  activeConversationId = "";
+  renderCrm();
+});
+document.getElementById("crmUnreadFilter").addEventListener("change", () => {
   activeConversationId = "";
   renderCrm();
 });

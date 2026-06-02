@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
     <title>Bormex Ads CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20260602-crm-sidebar-layout" />
+    <link rel="stylesheet" href="styles.css?v=20260602-crm-unread-filter" />
   </head>
   <body>
     <div class="app-shell" id="appShell">
@@ -168,6 +168,11 @@
                     <option value="whatsapp">WhatsApp</option>
                     <option value="messenger">Messenger</option>
                     <option value="instagram">Instagram</option>
+                  </select>
+                  <select id="crmUnreadFilter" aria-label="Estado de lectura">
+                    <option value="all">Todos</option>
+                    <option value="unread">No leídos</option>
+                    <option value="read">Leídos</option>
                   </select>
                   <select id="crmTagFilter" aria-label="Etiqueta">
                     <option value="all">Todas las etiquetas</option>
@@ -442,7 +447,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=20260602-crm-sidebar-layout"></script>
+    <script src="app.js?v=20260602-crm-unread-filter"></script>
     <script>
       window.lucide?.createIcons();
     </script>

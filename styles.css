@@ -1064,6 +1064,10 @@ textarea:focus {
   width: 100%;
 }
 
+#crmTagFilter {
+  grid-column: 1 / -1;
+}
+
 .crm-tag-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 120px 72px;

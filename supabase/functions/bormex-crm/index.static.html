@@ -1072,6 +1072,10 @@ textarea:focus {
   width: 100%;
 }
 
+#crmTagFilter {
+  grid-column: 1 / -1;
+}
+
 .crm-tag-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 120px 72px;
@@ -1942,6 +1946,11 @@ textarea:focus {
                     <option value="whatsapp">WhatsApp</option>
                     <option value="messenger">Messenger</option>
                     <option value="instagram">Instagram</option>
+                  </select>
+                  <select id="crmUnreadFilter" aria-label="Estado de lectura">
+                    <option value="all">Todos</option>
+                    <option value="unread">No leídos</option>
+                    <option value="read">Leídos</option>
                   </select>
                   <select id="crmTagFilter" aria-label="Etiqueta">
                     <option value="all">Todas las etiquetas</option>
@@ -3324,10 +3333,17 @@ function getConversationSearchText(conversation) {
 
 function getConversationRows() {
   const channelFilter = document.getElementById("crmChannelFilter")?.value || "all";
+  const unreadFilter = document.getElementById("crmUnreadFilter")?.value || "all";
   const tagFilter = document.getElementById("crmTagFilter")?.value || "all";
   const query = (document.getElementById("crmSearch")?.value || "").trim().toLowerCase();
   return [...(state.conversations || [])]
     .filter((conversation) => channelFilter === "all" || conversation.channel === channelFilter)
+    .filter((conversation) => {
+      const unreadCount = Math.max(0, Number(conversation.unread || 0));
+      if (unreadFilter === "unread") return unreadCount > 0;
+      if (unreadFilter === "read") return unreadCount === 0;
+      return true;
+    })
     .filter((conversation) => {
       if (tagFilter === "all") return true;
       const tagIds = conversationTagIds(conversation);
@@ -4254,6 +4270,10 @@ document.getElementById("exportSpendCsv").addEventListener("click", () => {
 
 document.getElementById("importCsv").addEventListener("click", importCsv);
 document.getElementById("crmChannelFilter").addEventListener("change", () => {
+  activeConversationId = "";
+  renderCrm();
+});
+document.getElementById("crmUnreadFilter").addEventListener("change", () => {
   activeConversationId = "";
   renderCrm();
 });
