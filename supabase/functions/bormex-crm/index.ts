@@ -1,5 +1,3 @@
-import { STATIC_HTML } from "./static-html.ts";
-
 const defaultDb = {
   conversations: [],
   messages: [],
@@ -44,7 +42,7 @@ Deno.serve(async (req) => {
     }
 
     if ((pathname === "/" || pathname === "/index.html") && req.method === "GET") {
-      return html(STATIC_HTML);
+      return html(frontendRedirectHtml());
     }
 
     if (pathname === "/oauth/meta" && req.method === "GET") {
@@ -179,6 +177,22 @@ Deno.serve(async (req) => {
     return json({ error: error instanceof Error ? error.message : "Error interno" }, 500);
   }
 });
+
+function frontendRedirectHtml() {
+  const frontendUrl = Deno.env.get("BORMEX_FRONTEND_URL") || "https://bormex-edergustavo.github.io/bormex-ads-crm/";
+  return `<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="refresh" content="0; url=${frontendUrl}" />
+    <title>Bormex Ads CRM</title>
+  </head>
+  <body>
+    <p><a href="${frontendUrl}">Abrir Bormex Ads CRM</a></p>
+  </body>
+</html>`;
+}
 
 function normalizePath(pathname: string) {
   if (pathname === "/bormex-crm") return "/";
