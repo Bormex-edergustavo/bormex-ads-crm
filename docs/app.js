@@ -33,6 +33,7 @@ let state = loadState();
 let serverAvailable = false;
 let activeConversationId = "";
 let remoteConfig = {};
+const mediaObjectUrlCache = new Map();
 
 const money = new Intl.NumberFormat("es-MX", {
   style: "currency",
@@ -136,6 +137,24 @@ async function apiForm(path, formData) {
   if (!response.ok) throw new Error(payload.error || "No se pudo conectar");
   hideAuthGate();
   return payload;
+}
+
+async function apiBlob(path) {
+  const headers = {};
+  if (panelCode) {
+    headers.Authorization = `Basic ${btoa(`panel:${panelCode}`)}`;
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, { headers });
+  if (response.status === 401) {
+    panelCode = "";
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    showAuthGate();
+    throw new Error("Ingresa el código del panel");
+  }
+  if (!response.ok) throw new Error((await response.text()) || "No se pudo descargar el archivo");
+  hideAuthGate();
+  return response.blob();
 }
 
 function getApiBase() {
@@ -933,6 +952,38 @@ function getConversationDisplayName(conversation) {
   return conversation?.customName || conversation?.name || conversation?.phone || conversation?.contactId || "";
 }
 
+function getConversationAvatarUrl(conversation) {
+  return [
+    conversation?.avatarUrl,
+    conversation?.avatar_url,
+    conversation?.profilePic,
+    conversation?.profile_pic,
+    conversation?.picture,
+  ]
+    .map((value) => String(value || "").trim())
+    .find((value) => /^https?:\/\//i.test(value)) || "";
+}
+
+function getConversationInitial(conversation) {
+  const label = getConversationDisplayName(conversation).replace(/^\+?52/, "").trim();
+  const namedInitial = label.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/)?.[0];
+  if (namedInitial) return namedInitial.toUpperCase();
+  return { whatsapp: "WA", messenger: "M", instagram: "IG" }[conversation?.channel] || "?";
+}
+
+function renderConversationAvatar(conversation) {
+  const avatarUrl = getConversationAvatarUrl(conversation);
+  const channel = escapeHtml(conversation?.channel || "");
+  if (avatarUrl) {
+    return `
+      <span class="conversation-avatar ${channel}">
+        <img src="${escapeHtml(avatarUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" />
+      </span>
+    `;
+  }
+  return `<span class="conversation-avatar ${channel}" aria-hidden="true">${escapeHtml(getConversationInitial(conversation))}</span>`;
+}
+
 function getConversationSearchText(conversation) {
   const attribution = getConversationAttribution(conversation);
   return [
@@ -988,17 +1039,22 @@ function renderCrm() {
         const unreadCount = Math.max(0, Number(conversation.unread || 0));
         return `
           <button class="conversation-item ${conversation.id === activeConversationId ? "active" : ""} ${unreadCount ? "has-unread" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button">
-            <span class="channel-pill ${escapeHtml(conversation.channel)}">${getChannelLabel(conversation.channel)}</span>
+            ${renderConversationAvatar(conversation)}
             ${unreadCount ? `<span class="unread-badge" aria-label="${unreadCount} mensajes por contestar">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}
-            <strong>${escapeHtml(getConversationDisplayName(conversation))}</strong>
-            <small class="conversation-preview">${escapeHtml(conversation.lastMessage || "")}</small>
-            ${attribution ? `<small class="conversation-attribution">${escapeHtml(attribution.ad || attribution.campaign || "Anuncio atribuido")}</small>` : ""}
-            ${due ? `<small class="conversation-due ${due === "Vencido" ? "is-due" : ""}">${escapeHtml(due)}</small>` : ""}
-            ${
-              tags.length
-                ? `<span class="tag-mini-row">${tags.slice(0, 3).map((tag) => `<span class="tag-mini" style="--tag-color:${escapeHtml(tag.color)}">${escapeHtml(tag.name)}</span>`).join("")}</span>`
-                : ""
-            }
+            <span class="conversation-content">
+              <span class="conversation-meta-row">
+                <span class="channel-pill ${escapeHtml(conversation.channel)}">${getChannelLabel(conversation.channel)}</span>
+              </span>
+              <strong>${escapeHtml(getConversationDisplayName(conversation))}</strong>
+              <small class="conversation-preview">${escapeHtml(conversation.lastMessage || "")}</small>
+              ${attribution ? `<small class="conversation-attribution">${escapeHtml(attribution.ad || attribution.campaign || "Anuncio atribuido")}</small>` : ""}
+              ${due ? `<small class="conversation-due ${due === "Vencido" ? "is-due" : ""}">${escapeHtml(due)}</small>` : ""}
+              ${
+                tags.length
+                  ? `<span class="tag-mini-row">${tags.slice(0, 3).map((tag) => `<span class="tag-mini" style="--tag-color:${escapeHtml(tag.color)}">${escapeHtml(tag.name)}</span>`).join("")}</span>`
+                  : ""
+              }
+            </span>
           </button>
         `;
       })
@@ -1093,6 +1149,7 @@ function renderCrm() {
   if (previousThreadConversationId !== activeConversationId || threadWasNearBottom) {
     thread.scrollTop = thread.scrollHeight;
   }
+  hydrateMediaAttachments(thread);
 }
 
 function updateReplyActions(conversation) {
@@ -1134,15 +1191,97 @@ function renderMessageAttachments(attachments = []) {
     <div class="attachment-list">
       ${attachments
         .map((attachment) => {
-          const label = attachment.filename || attachment.title || attachment.caption || attachment.type || "archivo";
+          const label = getAttachmentLabel(attachment);
+          const type = getAttachmentType(attachment);
           if (attachment.url) {
-            return `<a href="${escapeHtml(attachment.url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(label)}</a>`;
+            return renderMediaPreview(attachment.url, type, label);
+          }
+          if (attachment.id) {
+            return `
+              <div class="message-media-frame is-loading"
+                data-whatsapp-media-id="${escapeHtml(attachment.id)}"
+                data-media-type="${escapeHtml(type)}"
+                data-media-label="${escapeHtml(label)}">
+                <span>Cargando ${escapeHtml(label)}</span>
+              </div>
+            `;
           }
           return `<small>${escapeHtml(label)}</small>`;
         })
         .join("")}
     </div>
   `;
+}
+
+function getAttachmentLabel(attachment) {
+  return attachment?.filename || attachment?.title || attachment?.caption || attachment?.mimeType || attachment?.type || "archivo";
+}
+
+function getAttachmentType(attachment = {}) {
+  const type = String(attachment.type || "").toLowerCase();
+  if (["image", "photo", "sticker"].includes(type)) return "image";
+  if (["video", "audio", "document", "file"].includes(type)) return type === "file" ? "document" : type;
+  const mimeType = String(attachment.mimeType || "").toLowerCase();
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
+  return inferAttachmentTypeFromName(getAttachmentLabel(attachment));
+}
+
+function inferAttachmentTypeFromName(name) {
+  if (/\.(jpe?g|png|gif|webp|heic)(\?|$)/i.test(name)) return "image";
+  if (/\.(mp4|mov|webm|m4v)(\?|$)/i.test(name)) return "video";
+  if (/\.(mp3|ogg|wav|m4a|aac)(\?|$)/i.test(name)) return "audio";
+  return "document";
+}
+
+function renderMediaPreview(url, type, label) {
+  const safeUrl = escapeHtml(url);
+  const safeLabel = escapeHtml(label);
+  if (type === "image") {
+    return `
+      <a class="message-media-link" href="${safeUrl}" target="_blank" rel="noreferrer noopener" aria-label="Abrir ${safeLabel}">
+        <img class="message-media" src="${safeUrl}" alt="${safeLabel}" loading="lazy" />
+      </a>
+    `;
+  }
+  if (type === "video") {
+    return `<video class="message-media" src="${safeUrl}" controls playsinline preload="metadata"></video>`;
+  }
+  if (type === "audio") {
+    return `<audio class="message-audio" src="${safeUrl}" controls preload="metadata"></audio>`;
+  }
+  return `<a class="message-file-link" href="${safeUrl}" target="_blank" rel="noreferrer noopener">${safeLabel}</a>`;
+}
+
+async function hydrateMediaAttachments(root) {
+  const frames = [...root.querySelectorAll("[data-whatsapp-media-id]")];
+  await Promise.all(
+    frames.map(async (frame) => {
+      const mediaId = frame.dataset.whatsappMediaId || "";
+      const label = frame.dataset.mediaLabel || "archivo";
+      const fallbackType = frame.dataset.mediaType || "document";
+      if (!mediaId) return;
+      try {
+        let cached = mediaObjectUrlCache.get(mediaId);
+        if (!cached) {
+          const blob = await apiBlob(`/api/media/whatsapp/${encodeURIComponent(mediaId)}`);
+          cached = {
+            url: URL.createObjectURL(blob),
+            type: getAttachmentType({ type: fallbackType, mimeType: blob.type, filename: label }),
+          };
+          mediaObjectUrlCache.set(mediaId, cached);
+        }
+        frame.classList.remove("is-loading", "is-error");
+        frame.classList.add("is-ready");
+        frame.innerHTML = renderMediaPreview(cached.url, cached.type, label);
+      } catch {
+        frame.classList.remove("is-loading");
+        frame.classList.add("is-error");
+        frame.innerHTML = `<span>No se pudo cargar ${escapeHtml(label)}</span>`;
+      }
+    }),
+  );
 }
 
 async function handleSaleSubmit(event) {

@@ -932,10 +932,10 @@ textarea:focus {
 
 .crm-shell {
   display: grid;
-  grid-template-columns: minmax(300px, 0.36fr) minmax(0, 1fr);
+  grid-template-columns: minmax(280px, 0.31fr) minmax(0, 1fr);
   gap: 18px;
-  height: calc(100vh - 150px);
-  min-height: 640px;
+  height: calc(100vh - 118px);
+  min-height: 720px;
 }
 
 .crm-list-panel,
@@ -975,8 +975,10 @@ textarea:focus {
 .conversation-item {
   position: relative;
   display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
   align-content: start;
-  gap: 6px;
+  align-items: start;
+  gap: 10px;
   min-height: auto;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: var(--radius);
@@ -993,7 +995,7 @@ textarea:focus {
 }
 
 .conversation-item.has-unread {
-  padding-right: 52px;
+  padding-right: 50px;
 }
 
 .conversation-item.active,
@@ -1025,10 +1027,60 @@ textarea:focus {
 
 .conversation-item .conversation-preview {
   display: -webkit-box;
-  min-height: 19px;
+  min-height: 38px;
   white-space: normal;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.conversation-content {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.conversation-meta-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.conversation-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.conversation-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.conversation-avatar.whatsapp {
+  background: rgba(16, 185, 129, 0.14);
+  color: #047857;
+}
+
+.conversation-avatar.messenger {
+  background: rgba(37, 99, 235, 0.14);
+  color: #1d4ed8;
+}
+
+.conversation-avatar.instagram {
+  background: rgba(225, 29, 72, 0.12);
+  color: #be123c;
 }
 
 .conversation-item .conversation-attribution {
@@ -1190,7 +1242,7 @@ textarea:focus {
   display: grid;
   align-content: start;
   grid-auto-rows: max-content;
-  gap: 10px;
+  gap: 12px;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1198,11 +1250,11 @@ textarea:focus {
   border-radius: var(--radius);
   background:
     linear-gradient(180deg, rgba(248, 250, 252, 0.78), rgba(238, 246, 255, 0.64));
-  padding: 14px;
+  padding: 16px;
 }
 
 .message-bubble {
-  max-width: min(680px, 82%);
+  max-width: min(820px, 88%);
   border-radius: var(--radius);
   padding: 10px 12px;
   box-shadow: var(--shadow-sm);
@@ -1242,7 +1294,7 @@ textarea:focus {
 
 .attachment-list {
   display: grid;
-  gap: 4px;
+  gap: 8px;
   margin-bottom: 6px;
 }
 
@@ -1251,6 +1303,58 @@ textarea:focus {
   font-size: 12px;
   font-weight: 900;
   overflow-wrap: anywhere;
+}
+
+.message-media-frame {
+  display: grid;
+  place-items: center;
+  min-width: min(320px, 72vw);
+  min-height: 120px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.message-media-frame.is-error {
+  min-height: 52px;
+  border-color: rgba(220, 38, 38, 0.24);
+  background: rgba(254, 226, 226, 0.78);
+  color: #991b1b;
+}
+
+.message-media-link {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.message-media {
+  display: block;
+  width: min(520px, 100%);
+  max-height: 420px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.08);
+  object-fit: contain;
+}
+
+.message-audio {
+  display: block;
+  width: min(380px, 100%);
+}
+
+.message-file-link {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.18);
+  padding: 9px 11px;
 }
 
 .reply-box {

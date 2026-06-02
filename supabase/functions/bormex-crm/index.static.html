@@ -940,10 +940,10 @@ textarea:focus {
 
 .crm-shell {
   display: grid;
-  grid-template-columns: minmax(300px, 0.36fr) minmax(0, 1fr);
+  grid-template-columns: minmax(280px, 0.31fr) minmax(0, 1fr);
   gap: 18px;
-  height: calc(100vh - 150px);
-  min-height: 640px;
+  height: calc(100vh - 118px);
+  min-height: 720px;
 }
 
 .crm-list-panel,
@@ -983,8 +983,10 @@ textarea:focus {
 .conversation-item {
   position: relative;
   display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
   align-content: start;
-  gap: 6px;
+  align-items: start;
+  gap: 10px;
   min-height: auto;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: var(--radius);
@@ -1001,7 +1003,7 @@ textarea:focus {
 }
 
 .conversation-item.has-unread {
-  padding-right: 52px;
+  padding-right: 50px;
 }
 
 .conversation-item.active,
@@ -1033,10 +1035,60 @@ textarea:focus {
 
 .conversation-item .conversation-preview {
   display: -webkit-box;
-  min-height: 19px;
+  min-height: 38px;
   white-space: normal;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.conversation-content {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.conversation-meta-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.conversation-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.conversation-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.conversation-avatar.whatsapp {
+  background: rgba(16, 185, 129, 0.14);
+  color: #047857;
+}
+
+.conversation-avatar.messenger {
+  background: rgba(37, 99, 235, 0.14);
+  color: #1d4ed8;
+}
+
+.conversation-avatar.instagram {
+  background: rgba(225, 29, 72, 0.12);
+  color: #be123c;
 }
 
 .conversation-item .conversation-attribution {
@@ -1198,7 +1250,7 @@ textarea:focus {
   display: grid;
   align-content: start;
   grid-auto-rows: max-content;
-  gap: 10px;
+  gap: 12px;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1206,11 +1258,11 @@ textarea:focus {
   border-radius: var(--radius);
   background:
     linear-gradient(180deg, rgba(248, 250, 252, 0.78), rgba(238, 246, 255, 0.64));
-  padding: 14px;
+  padding: 16px;
 }
 
 .message-bubble {
-  max-width: min(680px, 82%);
+  max-width: min(820px, 88%);
   border-radius: var(--radius);
   padding: 10px 12px;
   box-shadow: var(--shadow-sm);
@@ -1250,7 +1302,7 @@ textarea:focus {
 
 .attachment-list {
   display: grid;
-  gap: 4px;
+  gap: 8px;
   margin-bottom: 6px;
 }
 
@@ -1259,6 +1311,58 @@ textarea:focus {
   font-size: 12px;
   font-weight: 900;
   overflow-wrap: anywhere;
+}
+
+.message-media-frame {
+  display: grid;
+  place-items: center;
+  min-width: min(320px, 72vw);
+  min-height: 120px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.message-media-frame.is-error {
+  min-height: 52px;
+  border-color: rgba(220, 38, 38, 0.24);
+  background: rgba(254, 226, 226, 0.78);
+  color: #991b1b;
+}
+
+.message-media-link {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.message-media {
+  display: block;
+  width: min(520px, 100%);
+  max-height: 420px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.08);
+  object-fit: contain;
+}
+
+.message-audio {
+  display: block;
+  width: min(380px, 100%);
+}
+
+.message-file-link {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.18);
+  padding: 9px 11px;
 }
 
 .reply-box {
@@ -1982,6 +2086,7 @@ let state = loadState();
 let serverAvailable = false;
 let activeConversationId = "";
 let remoteConfig = {};
+const mediaObjectUrlCache = new Map();
 
 const money = new Intl.NumberFormat("es-MX", {
   style: "currency",
@@ -2085,6 +2190,24 @@ async function apiForm(path, formData) {
   if (!response.ok) throw new Error(payload.error || "No se pudo conectar");
   hideAuthGate();
   return payload;
+}
+
+async function apiBlob(path) {
+  const headers = {};
+  if (panelCode) {
+    headers.Authorization = `Basic ${btoa(`panel:${panelCode}`)}`;
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, { headers });
+  if (response.status === 401) {
+    panelCode = "";
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    showAuthGate();
+    throw new Error("Ingresa el código del panel");
+  }
+  if (!response.ok) throw new Error((await response.text()) || "No se pudo descargar el archivo");
+  hideAuthGate();
+  return response.blob();
 }
 
 function getApiBase() {
@@ -2882,6 +3005,38 @@ function getConversationDisplayName(conversation) {
   return conversation?.customName || conversation?.name || conversation?.phone || conversation?.contactId || "";
 }
 
+function getConversationAvatarUrl(conversation) {
+  return [
+    conversation?.avatarUrl,
+    conversation?.avatar_url,
+    conversation?.profilePic,
+    conversation?.profile_pic,
+    conversation?.picture,
+  ]
+    .map((value) => String(value || "").trim())
+    .find((value) => /^https?:\/\//i.test(value)) || "";
+}
+
+function getConversationInitial(conversation) {
+  const label = getConversationDisplayName(conversation).replace(/^\+?52/, "").trim();
+  const namedInitial = label.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/)?.[0];
+  if (namedInitial) return namedInitial.toUpperCase();
+  return { whatsapp: "WA", messenger: "M", instagram: "IG" }[conversation?.channel] || "?";
+}
+
+function renderConversationAvatar(conversation) {
+  const avatarUrl = getConversationAvatarUrl(conversation);
+  const channel = escapeHtml(conversation?.channel || "");
+  if (avatarUrl) {
+    return `
+      <span class="conversation-avatar ${channel}">
+        <img src="${escapeHtml(avatarUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" />
+      </span>
+    `;
+  }
+  return `<span class="conversation-avatar ${channel}" aria-hidden="true">${escapeHtml(getConversationInitial(conversation))}</span>`;
+}
+
 function getConversationSearchText(conversation) {
   const attribution = getConversationAttribution(conversation);
   return [
@@ -2937,17 +3092,22 @@ function renderCrm() {
         const unreadCount = Math.max(0, Number(conversation.unread || 0));
         return `
           <button class="conversation-item ${conversation.id === activeConversationId ? "active" : ""} ${unreadCount ? "has-unread" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button">
-            <span class="channel-pill ${escapeHtml(conversation.channel)}">${getChannelLabel(conversation.channel)}</span>
+            ${renderConversationAvatar(conversation)}
             ${unreadCount ? `<span class="unread-badge" aria-label="${unreadCount} mensajes por contestar">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}
-            <strong>${escapeHtml(getConversationDisplayName(conversation))}</strong>
-            <small class="conversation-preview">${escapeHtml(conversation.lastMessage || "")}</small>
-            ${attribution ? `<small class="conversation-attribution">${escapeHtml(attribution.ad || attribution.campaign || "Anuncio atribuido")}</small>` : ""}
-            ${due ? `<small class="conversation-due ${due === "Vencido" ? "is-due" : ""}">${escapeHtml(due)}</small>` : ""}
-            ${
-              tags.length
-                ? `<span class="tag-mini-row">${tags.slice(0, 3).map((tag) => `<span class="tag-mini" style="--tag-color:${escapeHtml(tag.color)}">${escapeHtml(tag.name)}</span>`).join("")}</span>`
-                : ""
-            }
+            <span class="conversation-content">
+              <span class="conversation-meta-row">
+                <span class="channel-pill ${escapeHtml(conversation.channel)}">${getChannelLabel(conversation.channel)}</span>
+              </span>
+              <strong>${escapeHtml(getConversationDisplayName(conversation))}</strong>
+              <small class="conversation-preview">${escapeHtml(conversation.lastMessage || "")}</small>
+              ${attribution ? `<small class="conversation-attribution">${escapeHtml(attribution.ad || attribution.campaign || "Anuncio atribuido")}</small>` : ""}
+              ${due ? `<small class="conversation-due ${due === "Vencido" ? "is-due" : ""}">${escapeHtml(due)}</small>` : ""}
+              ${
+                tags.length
+                  ? `<span class="tag-mini-row">${tags.slice(0, 3).map((tag) => `<span class="tag-mini" style="--tag-color:${escapeHtml(tag.color)}">${escapeHtml(tag.name)}</span>`).join("")}</span>`
+                  : ""
+              }
+            </span>
           </button>
         `;
       })
@@ -3042,6 +3202,7 @@ function renderCrm() {
   if (previousThreadConversationId !== activeConversationId || threadWasNearBottom) {
     thread.scrollTop = thread.scrollHeight;
   }
+  hydrateMediaAttachments(thread);
 }
 
 function updateReplyActions(conversation) {
@@ -3083,15 +3244,97 @@ function renderMessageAttachments(attachments = []) {
     <div class="attachment-list">
       ${attachments
         .map((attachment) => {
-          const label = attachment.filename || attachment.title || attachment.caption || attachment.type || "archivo";
+          const label = getAttachmentLabel(attachment);
+          const type = getAttachmentType(attachment);
           if (attachment.url) {
-            return `<a href="${escapeHtml(attachment.url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(label)}</a>`;
+            return renderMediaPreview(attachment.url, type, label);
+          }
+          if (attachment.id) {
+            return `
+              <div class="message-media-frame is-loading"
+                data-whatsapp-media-id="${escapeHtml(attachment.id)}"
+                data-media-type="${escapeHtml(type)}"
+                data-media-label="${escapeHtml(label)}">
+                <span>Cargando ${escapeHtml(label)}</span>
+              </div>
+            `;
           }
           return `<small>${escapeHtml(label)}</small>`;
         })
         .join("")}
     </div>
   `;
+}
+
+function getAttachmentLabel(attachment) {
+  return attachment?.filename || attachment?.title || attachment?.caption || attachment?.mimeType || attachment?.type || "archivo";
+}
+
+function getAttachmentType(attachment = {}) {
+  const type = String(attachment.type || "").toLowerCase();
+  if (["image", "photo", "sticker"].includes(type)) return "image";
+  if (["video", "audio", "document", "file"].includes(type)) return type === "file" ? "document" : type;
+  const mimeType = String(attachment.mimeType || "").toLowerCase();
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
+  return inferAttachmentTypeFromName(getAttachmentLabel(attachment));
+}
+
+function inferAttachmentTypeFromName(name) {
+  if (/\.(jpe?g|png|gif|webp|heic)(\?|$)/i.test(name)) return "image";
+  if (/\.(mp4|mov|webm|m4v)(\?|$)/i.test(name)) return "video";
+  if (/\.(mp3|ogg|wav|m4a|aac)(\?|$)/i.test(name)) return "audio";
+  return "document";
+}
+
+function renderMediaPreview(url, type, label) {
+  const safeUrl = escapeHtml(url);
+  const safeLabel = escapeHtml(label);
+  if (type === "image") {
+    return `
+      <a class="message-media-link" href="${safeUrl}" target="_blank" rel="noreferrer noopener" aria-label="Abrir ${safeLabel}">
+        <img class="message-media" src="${safeUrl}" alt="${safeLabel}" loading="lazy" />
+      </a>
+    `;
+  }
+  if (type === "video") {
+    return `<video class="message-media" src="${safeUrl}" controls playsinline preload="metadata"></video>`;
+  }
+  if (type === "audio") {
+    return `<audio class="message-audio" src="${safeUrl}" controls preload="metadata"></audio>`;
+  }
+  return `<a class="message-file-link" href="${safeUrl}" target="_blank" rel="noreferrer noopener">${safeLabel}</a>`;
+}
+
+async function hydrateMediaAttachments(root) {
+  const frames = [...root.querySelectorAll("[data-whatsapp-media-id]")];
+  await Promise.all(
+    frames.map(async (frame) => {
+      const mediaId = frame.dataset.whatsappMediaId || "";
+      const label = frame.dataset.mediaLabel || "archivo";
+      const fallbackType = frame.dataset.mediaType || "document";
+      if (!mediaId) return;
+      try {
+        let cached = mediaObjectUrlCache.get(mediaId);
+        if (!cached) {
+          const blob = await apiBlob(`/api/media/whatsapp/${encodeURIComponent(mediaId)}`);
+          cached = {
+            url: URL.createObjectURL(blob),
+            type: getAttachmentType({ type: fallbackType, mimeType: blob.type, filename: label }),
+          };
+          mediaObjectUrlCache.set(mediaId, cached);
+        }
+        frame.classList.remove("is-loading", "is-error");
+        frame.classList.add("is-ready");
+        frame.innerHTML = renderMediaPreview(cached.url, cached.type, label);
+      } catch {
+        frame.classList.remove("is-loading");
+        frame.classList.add("is-error");
+        frame.innerHTML = `<span>No se pudo cargar ${escapeHtml(label)}</span>`;
+      }
+    }),
+  );
 }
 
 async function handleSaleSubmit(event) {

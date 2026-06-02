@@ -111,6 +111,13 @@ Deno.serve(async (req) => {
       return json(await uploadWhatsAppMedia(await req.formData()));
     }
 
+    if (pathname.startsWith("/api/media/whatsapp/") && req.method === "GET") {
+      return await downloadWhatsAppMedia(
+        decodeURIComponent(pathname.replace("/api/media/whatsapp/", "")),
+        req,
+      );
+    }
+
     if (pathname.startsWith("/api/conversations/") && req.method === "POST") {
       await updateConversation(decodeURIComponent(pathname.replace("/api/conversations/", "")), await readJson(req));
       return json(filterStateForRole(await readDb(), accessRole));
@@ -216,6 +223,7 @@ Deno.serve(async (req) => {
     if (pathname === "/webhooks/meta" && req.method === "POST") {
       const body = await readVerifiedMetaJson(req);
       const payload = extractMetaMessagingEvents(body);
+      await enrichMetaConversationProfiles(payload.conversations);
       await upsertItems("conversations", payload.conversations);
       await upsertItems("messages", payload.messages);
       await rememberWebhookEvent("meta", body, { leads: [], ...payload });
@@ -448,10 +456,14 @@ function mergeConversationData(existing: any, incoming: Record<string, unknown>)
     "followUpNotifiedAt",
     "crmNote",
     "customName",
+    "avatarUrl",
   ]) {
     if (!Object.prototype.hasOwnProperty.call(incoming, field) && existing?.[field] !== undefined) {
       merged[field] = existing[field];
     }
+  }
+  if (Object.prototype.hasOwnProperty.call(incoming, "avatarUrl") && !incoming.avatarUrl && existing?.avatarUrl) {
+    merged.avatarUrl = existing.avatarUrl;
   }
   for (const field of ["adId", "ad", "adset", "campaign", "campaignId", "ctwaClid", "sourceUrl", "attributionSource"]) {
     if (!Object.prototype.hasOwnProperty.call(incoming, field) && existing?.[field] !== undefined) {
@@ -500,6 +512,7 @@ function normalizeConversationPatch(body: any) {
     phone,
     name: String(body.name || contactId || phone || ""),
     customName: String(body.customName || ""),
+    avatarUrl: String(body.avatarUrl || body.avatar_url || body.profilePic || body.profile_pic || body.picture || ""),
     lastMessage: String(body.lastMessage || body.last_message || ""),
     lastAt: String(body.lastAt || body.last_at || new Date().toISOString()),
     unread: Number(body.unread || 0),
@@ -861,6 +874,43 @@ async function uploadWhatsAppMedia(formData: FormData) {
     mimeType: file.type || "",
     size: file.size || 0,
   };
+}
+
+async function downloadWhatsAppMedia(mediaId: string, req: Request) {
+  const token = whatsappMediaAccessToken();
+  if (!token) {
+    throw new Error("Falta WHATSAPP_SEND_ACCESS_TOKEN, WHATSAPP_COEX_ACCESS_TOKEN o WHATSAPP_ACCESS_TOKEN para ver archivos de WhatsApp");
+  }
+  if (!mediaId) throw new HttpError(400, "Falta media id");
+
+  const metadata = await graphRequest(`/${mediaId}`, token, "GET");
+  const mediaUrl = String(metadata.url || "");
+  if (!mediaUrl) throw new HttpError(404, "Meta no devolvio URL para este archivo");
+
+  const headers = new Headers({ authorization: `Bearer ${token}` });
+  const range = req.headers.get("range");
+  if (range) headers.set("range", range);
+
+  const response = await fetch(mediaUrl, { headers });
+  if (!response.ok || !response.body) {
+    let errorText = "";
+    try {
+      errorText = await response.text();
+    } catch {
+      errorText = "";
+    }
+    throw new Error(errorText || `Meta no permitio descargar el archivo (${response.status})`);
+  }
+
+  const responseHeaders = new Headers({
+    "cache-control": "private, max-age=300",
+    "content-type": response.headers.get("content-type") || String(metadata.mime_type || "application/octet-stream"),
+  });
+  for (const header of ["content-length", "content-range", "accept-ranges"]) {
+    const value = response.headers.get(header);
+    if (value) responseHeaders.set(header, value);
+  }
+  return cors(new Response(response.body, { status: response.status === 206 ? 206 : 200, headers: responseHeaders }));
 }
 
 function formatWhatsAppSendError(payload: any) {
@@ -1516,6 +1566,7 @@ function extractWhatsAppEvents(payload: any) {
           contactId: phone,
           phone,
           name,
+          avatarUrl: extractWhatsAppContactAvatarUrl(contact),
           lastMessage: contact.action === "remove" ? "Contacto eliminado en WhatsApp Business App" : "Contacto sincronizado desde WhatsApp Business App",
           lastAt: at,
           unread: 0,
@@ -1539,6 +1590,7 @@ function extractWhatsAppEvents(payload: any) {
           contactId: phone,
           phone,
           name: contact.profile?.name || phone,
+          avatarUrl: extractWhatsAppContactAvatarUrl(contact),
           lastMessage: textBody,
           lastAt: at,
           unread: isEcho ? 0 : 1,
@@ -1684,12 +1736,14 @@ function extractMetaMessagingEvents(payload: any) {
       const at = event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString();
       const referral = event.referral || event.message?.referral || event.postback?.referral || {};
       const attribution = normalizeReferralAttribution(referral, `${channel}_referral`);
+      const avatarUrl = extractMetaAvatarUrl(event, entry);
       conversations.push({
         id: conversationId,
         channel,
         contactId,
         phone: "",
         name: contactId,
+        avatarUrl,
         lastMessage: textBody,
         lastAt: at,
         unread: isEcho ? 0 : 1,
@@ -1751,6 +1805,76 @@ function extractMetaMessageAttachments(message: any) {
     url: attachment.payload?.url || "",
     title: attachment.title || "",
   }));
+}
+
+async function enrichMetaConversationProfiles(conversations: Array<Record<string, any>>) {
+  const targets = new Map<string, Record<string, any>>();
+  for (const conversation of conversations) {
+    if (!conversation.contactId || conversation.avatarUrl) continue;
+    targets.set(`${conversation.channel}:${conversation.contactId}`, conversation);
+  }
+  for (const conversation of [...targets.values()].slice(0, 12)) {
+    try {
+      const profile = await fetchMetaMessagingProfile(String(conversation.channel || ""), String(conversation.contactId || ""));
+      if (!profile) continue;
+      for (const item of conversations) {
+        if (item.channel !== conversation.channel || item.contactId !== conversation.contactId) continue;
+        if (profile.avatarUrl) item.avatarUrl = profile.avatarUrl;
+        if (profile.name && item.name === item.contactId) item.name = profile.name;
+      }
+    } catch {
+      // Webhook delivery should keep working even when Meta withholds profile details.
+    }
+  }
+}
+
+async function fetchMetaMessagingProfile(channel: string, contactId: string) {
+  const token = channel === "instagram" ? instagramAccessToken() || messengerAccessToken() : messengerAccessToken();
+  if (!token || !contactId) return null;
+  const fields = channel === "instagram"
+    ? "name,username,profile_pic"
+    : "first_name,last_name,name,profile_pic,picture";
+  const payload = await graphRequest(`/${contactId}`, token, "GET", { fields });
+  const name = [payload.first_name, payload.last_name].filter(Boolean).join(" ") || payload.name || payload.username || "";
+  const avatarUrl = extractFirstHttpUrl(payload.profile_pic, payload.picture?.data?.url, payload.picture);
+  return { name: String(name || ""), avatarUrl };
+}
+
+function extractMetaAvatarUrl(event: any, entry: any) {
+  return extractFirstHttpUrl(
+    event.sender?.profile_pic,
+    event.sender?.profile_pic_url,
+    event.sender?.picture?.data?.url,
+    event.sender?.picture,
+    event.profile_pic,
+    event.profile_pic_url,
+    entry.profile_pic,
+    entry.profile_pic_url,
+  );
+}
+
+function extractWhatsAppContactAvatarUrl(contact: any) {
+  return extractFirstHttpUrl(
+    contact.profile?.profile_pic,
+    contact.profile?.profile_pic_url,
+    contact.profile?.picture?.data?.url,
+    contact.profile?.picture,
+    contact.profile?.avatar,
+    contact.profile_pic,
+    contact.profile_pic_url,
+    contact.picture,
+    contact.avatar,
+    contact.photo,
+    contact.image,
+  );
+}
+
+function extractFirstHttpUrl(...values: unknown[]) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (/^https?:\/\//i.test(text)) return text;
+  }
+  return "";
 }
 
 function normalizeSale(body: any) {
@@ -1958,6 +2082,10 @@ function whatsappSendAccessToken() {
   return Deno.env.get("WHATSAPP_USE_ACCESS_TOKEN_FOR_SEND") === "true" ? whatsappAccessToken() : "";
 }
 
+function whatsappMediaAccessToken() {
+  return whatsappSendAccessToken() || whatsappAccessToken();
+}
+
 function messengerAccessToken() {
   return Deno.env.get("MESSENGER_PAGE_ACCESS_TOKEN") || Deno.env.get("META_PAGE_ACCESS_TOKEN") || Deno.env.get("META_ACCESS_TOKEN") || "";
 }
@@ -2093,7 +2221,7 @@ function text(payload: string, status = 200, headers: HeadersInit = {}) {
 
 function cors(response: Response) {
   response.headers.set("access-control-allow-origin", "*");
-  response.headers.set("access-control-allow-headers", "authorization, content-type, x-cron-secret");
+  response.headers.set("access-control-allow-headers", "authorization, content-type, range, x-cron-secret");
   response.headers.set("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
   return response;
 }
