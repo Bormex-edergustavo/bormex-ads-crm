@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
     <title>Bormex Ads CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20260602-crm-files" />
+    <link rel="stylesheet" href="styles.css?v=20260602-crm-sendfix" />
   </head>
   <body>
     <div class="app-shell">
@@ -208,8 +208,8 @@
                   <input name="mediaFile" type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx" />
                 </div>
                 <div class="reply-actions">
-                  <button class="primary-button" type="submit">Enviar API</button>
-                  <button class="secondary-button" id="openWhatsAppDraft" type="button">Abrir WhatsApp</button>
+                  <button class="primary-button" id="openWhatsAppDraft" type="button">Abrir WhatsApp</button>
+                  <button class="secondary-button" id="sendApiButton" type="submit">Enviar API Meta</button>
                 </div>
               </form>
             </div>
@@ -452,7 +452,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=20260602-crm-files"></script>
+    <script src="app.js?v=20260602-crm-sendfix"></script>
     <script>
       window.lucide?.createIcons();
     </script>

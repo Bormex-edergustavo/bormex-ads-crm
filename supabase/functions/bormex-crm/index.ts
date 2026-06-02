@@ -263,11 +263,14 @@ function normalizePath(pathname: string) {
 }
 
 function configPayload(role = "") {
+  const whatsappSendTokenConfigured = Boolean(whatsappSendAccessToken());
   return {
     metaAdsConfigured: Boolean(metaAdsAccessToken() && Deno.env.get("META_AD_ACCOUNT_ID")),
     whatsappWebhookConfigured: Boolean(metaWebhookVerifyToken()),
     whatsappPhoneConfigured: Boolean(Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
-    whatsappApiConfigured: Boolean(whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
+    whatsappApiConfigured: Boolean(whatsappSendTokenConfigured && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
+    whatsappSendApiConfigured: Boolean(whatsappSendTokenConfigured && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
+    whatsappReceiveApiConfigured: Boolean(whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappCoexistenceReady: Boolean(metaWebhookVerifyToken() && whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappCoexistenceOnboardingConfigured: Boolean(metaAppId() && metaEmbeddedSignupConfigId()),
     webhookSignatureConfigured: Boolean(metaAppSecret()),
@@ -697,7 +700,7 @@ async function sendCrmMessage(body: any) {
   const to = normalizeChannelRecipient(channel, body.to || body.phone || body.contactId || "");
   const textBody = String(body.text || "").trim();
   const media = normalizeOutgoingMedia(body);
-  if (!channel || !conversationId || !to || (!textBody && !media.url)) throw new Error("Faltan datos para enviar el mensaje");
+  if (!channel || !conversationId || !to || (!textBody && !media.url && !media.id)) throw new Error("Faltan datos para enviar el mensaje");
 
   let providerMessageId = crypto.randomUUID();
   if (channel === "whatsapp") providerMessageId = await sendWhatsAppMessage(to, textBody, media);
@@ -773,7 +776,7 @@ async function sendWhatsAppMessage(to: string, textBody: string, media: { type: 
   const token = whatsappSendAccessToken();
   const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
   if (!token || !phoneNumberId) {
-    throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_ACCESS_TOKEN/META_ACCESS_TOKEN");
+    throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_SEND_ACCESS_TOKEN/WHATSAPP_COEX_ACCESS_TOKEN para enviar desde API Meta");
   }
   const body = media.url || media.id
     ? {
@@ -1922,7 +1925,9 @@ function whatsappAccessToken() {
 }
 
 function whatsappSendAccessToken() {
-  return Deno.env.get("WHATSAPP_SEND_ACCESS_TOKEN") || Deno.env.get("WHATSAPP_COEX_ACCESS_TOKEN") || whatsappAccessToken();
+  const sendToken = Deno.env.get("WHATSAPP_SEND_ACCESS_TOKEN") || Deno.env.get("WHATSAPP_COEX_ACCESS_TOKEN") || "";
+  if (sendToken) return sendToken;
+  return Deno.env.get("WHATSAPP_USE_ACCESS_TOKEN_FOR_SEND") === "true" ? whatsappAccessToken() : "";
 }
 
 function messengerAccessToken() {

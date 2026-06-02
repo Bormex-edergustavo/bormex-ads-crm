@@ -32,6 +32,7 @@ const defaultState = {
 let state = loadState();
 let serverAvailable = false;
 let activeConversationId = "";
+let remoteConfig = {};
 
 const money = new Intl.NumberFormat("es-MX", {
   style: "currency",
@@ -184,6 +185,7 @@ async function syncFromServer() {
       api("/api/meta/coexistence").catch(() => null),
     ]);
     serverAvailable = true;
+    remoteConfig = config || {};
     accessRole = config.role || roleFromCode(panelCode) || accessRole;
     state.conversations = remoteState.conversations || state.conversations;
     state.messages = remoteState.messages || state.messages;
@@ -198,6 +200,7 @@ async function syncFromServer() {
     saveState();
   } catch {
     serverAvailable = false;
+    remoteConfig = {};
     renderConnectionStatus(null, null);
   }
 }
@@ -254,7 +257,8 @@ function renderConnectionStatus(config, remoteState, coexistenceSetup = null) {
     const coexistenceStatus = config.whatsappCoexistenceReady
       ? "Preparado para coexistencia; no requiere desregistrar la app."
       : "Faltan datos para operar coexistencia completa.";
-    if (whatsappText) whatsappText.textContent = `Webhook guardado. ${phoneStatus} ${coexistenceStatus} Último evento recibido: ${remoteState.lastWebhookAt || "todavía ninguno"}.`;
+    const sendStatus = config.whatsappSendApiConfigured ? "Envío API Meta activo." : "Envío API Meta pendiente; usa Abrir WhatsApp.";
+    if (whatsappText) whatsappText.textContent = `Webhook guardado. ${phoneStatus} ${coexistenceStatus} ${sendStatus} Último evento recibido: ${remoteState.lastWebhookAt || "todavía ninguno"}.`;
   } else {
     setConnected(whatsappDot, false);
     if (whatsappText) whatsappText.textContent = "Falta META_WEBHOOK_VERIFY_TOKEN o WHATSAPP_VERIFY_TOKEN para verificar el webhook de Meta.";
@@ -1009,10 +1013,12 @@ function renderCrm() {
     `;
     thread.innerHTML = `<div class="empty">Sin conversación seleccionada.</div>`;
     document.getElementById("replyForm").classList.add("disabled");
+    updateReplyActions(null);
     return;
   }
 
   document.getElementById("replyForm").classList.remove("disabled");
+  updateReplyActions(active);
   const activeAttribution = getConversationAttribution(active);
   const activeTags = conversationTags(active);
   const activeTagIds = new Set(conversationTagIds(active));
@@ -1089,6 +1095,28 @@ function renderCrm() {
   if (previousThreadConversationId !== activeConversationId || threadWasNearBottom) {
     thread.scrollTop = thread.scrollHeight;
   }
+}
+
+function updateReplyActions(conversation) {
+  const sendApiButton = document.getElementById("sendApiButton");
+  const openWhatsAppButton = document.getElementById("openWhatsAppDraft");
+  if (!sendApiButton || !openWhatsAppButton) return;
+
+  const isWhatsApp = conversation?.channel === "whatsapp";
+  const canSendWhatsAppApi = Boolean(remoteConfig.whatsappSendApiConfigured);
+  openWhatsAppButton.disabled = !isWhatsApp;
+  openWhatsAppButton.textContent = isWhatsApp ? "Abrir WhatsApp" : "Solo WhatsApp";
+
+  if (isWhatsApp && !canSendWhatsAppApi) {
+    sendApiButton.disabled = true;
+    sendApiButton.textContent = "API Meta sin token";
+    sendApiButton.title = "Falta configurar WHATSAPP_SEND_ACCESS_TOKEN o WHATSAPP_COEX_ACCESS_TOKEN con permiso whatsapp_business_messaging.";
+    return;
+  }
+
+  sendApiButton.disabled = !conversation;
+  sendApiButton.textContent = "Enviar API Meta";
+  sendApiButton.title = "";
 }
 
 function focusReplyComposer() {
@@ -1720,6 +1748,10 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
   const mediaFile = form.elements.mediaFile.files?.[0] || null;
   const mediaType = form.elements.mediaType.value;
   if (!conversation || (!text && !mediaFile)) return;
+  if (conversation.channel === "whatsapp" && !remoteConfig.whatsappSendApiConfigured) {
+    openWhatsAppDraft();
+    return;
+  }
   try {
     let uploadedMedia = null;
     if (mediaFile) {
@@ -1754,7 +1786,9 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
     toast(mediaFile ? "Mensaje con archivo enviado" : "Mensaje enviado");
   } catch (error) {
     if (isWhatsAppPermissionError(error)) {
-      toast("Meta no permite enviar con el token actual. Usa Abrir WhatsApp o configura el token COEX de envio.");
+      remoteConfig.whatsappSendApiConfigured = false;
+      updateReplyActions(conversation);
+      openWhatsAppDraft();
       return;
     }
     toast(error.message);
