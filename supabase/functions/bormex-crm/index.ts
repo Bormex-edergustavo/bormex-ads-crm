@@ -430,6 +430,7 @@ function mergeConversationData(existing: any, incoming: Record<string, unknown>)
     "followUpNote",
     "followUpNotifiedAt",
     "crmNote",
+    "customName",
   ]) {
     if (!Object.prototype.hasOwnProperty.call(incoming, field) && existing?.[field] !== undefined) {
       merged[field] = existing[field];
@@ -444,6 +445,7 @@ function mergeConversationData(existing: any, incoming: Record<string, unknown>)
     }
   }
   merged.tags = normalizeTagIds(merged.tags);
+  if (merged.customName) merged.name = String(merged.customName);
   merged.updatedAt = String(incoming.updatedAt || new Date().toISOString());
   return merged;
 }
@@ -467,6 +469,7 @@ function normalizeConversationPatch(body: any) {
     contactId,
     phone,
     name: String(body.name || contactId || phone || ""),
+    customName: String(body.customName || ""),
     lastMessage: String(body.lastMessage || body.last_message || ""),
     lastAt: String(body.lastAt || body.last_at || new Date().toISOString()),
     unread: Number(body.unread || 0),
@@ -706,6 +709,7 @@ async function sendCrmMessage(body: any) {
       contactId: to,
       phone: channel === "whatsapp" ? to : "",
       name: String(body.name || to),
+      customName: String(body.customName || ""),
       lastMessage: textBody || `[${media.type}]`,
       lastAt: now,
       unread: 0,
@@ -760,7 +764,7 @@ async function sendWhatsAppText(to: string, textBody: string) {
 }
 
 async function sendWhatsAppMessage(to: string, textBody: string, media: { type: string; url: string; filename?: string }) {
-  const token = whatsappAccessToken();
+  const token = whatsappSendAccessToken();
   const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
   if (!token || !phoneNumberId) {
     throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_ACCESS_TOKEN/META_ACCESS_TOKEN");
@@ -790,8 +794,17 @@ async function sendWhatsAppMessage(to: string, textBody: string, media: { type: 
     body: JSON.stringify(body),
   });
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error?.message || "Meta no acepto el mensaje de WhatsApp");
+  if (!response.ok) throw new Error(formatWhatsAppSendError(payload));
   return payload.messages?.[0]?.id || crypto.randomUUID();
+}
+
+function formatWhatsAppSendError(payload: any) {
+  const message = String(payload?.error?.message || "");
+  const code = payload?.error?.code ? `#${payload.error.code}` : "";
+  if (code === "#200" || message.toLowerCase().includes("necessary permissions")) {
+    return "(#200) El token configurado no tiene permiso para enviar mensajes en nombre de este WABA. Recibir por COEX/Dualhook funciona, pero para enviar desde el CRM falta configurar WHATSAPP_SEND_ACCESS_TOKEN o WHATSAPP_COEX_ACCESS_TOKEN con permisos whatsapp_business_messaging.";
+  }
+  return message || "Meta no acepto el mensaje de WhatsApp";
 }
 
 async function sendMessengerText(to: string, textBody: string) {
@@ -1868,6 +1881,10 @@ function metaAdsAccessToken() {
 
 function whatsappAccessToken() {
   return Deno.env.get("WHATSAPP_ACCESS_TOKEN") || Deno.env.get("META_ACCESS_TOKEN") || "";
+}
+
+function whatsappSendAccessToken() {
+  return Deno.env.get("WHATSAPP_SEND_ACCESS_TOKEN") || Deno.env.get("WHATSAPP_COEX_ACCESS_TOKEN") || whatsappAccessToken();
 }
 
 function messengerAccessToken() {

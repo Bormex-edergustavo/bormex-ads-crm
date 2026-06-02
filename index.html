@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
     <title>Bormex Ads CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20260602-crm-tags" />
+    <link rel="stylesheet" href="styles.css?v=20260602-crm-fixes" />
   </head>
   <body>
     <div class="app-shell">
@@ -165,6 +165,7 @@
                   <option value="instagram">Instagram</option>
                 </select>
               </div>
+              <input id="crmSearch" class="crm-search" placeholder="Buscar nombre, número o anuncio" />
               <div class="connection-panel compact">
                 <span class="connection-dot pending" id="inboxConnectionDot"></span>
                 <div>
@@ -206,7 +207,10 @@
                   </select>
                   <input name="mediaUrl" inputmode="url" placeholder="URL de archivo" />
                 </div>
-                <button class="primary-button" type="submit">Enviar</button>
+                <div class="reply-actions">
+                  <button class="primary-button" type="submit">Enviar API</button>
+                  <button class="secondary-button" id="openWhatsAppDraft" type="button">Abrir WhatsApp</button>
+                </div>
               </form>
             </div>
           </section>
@@ -448,7 +452,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=20260602-crm-tags"></script>
+    <script src="app.js?v=20260602-crm-fixes"></script>
     <script>
       window.lucide?.createIcons();
     </script>

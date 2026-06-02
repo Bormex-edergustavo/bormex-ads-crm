@@ -945,8 +945,12 @@ textarea:focus {
 
 .crm-list-panel {
   display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
   gap: 12px;
+}
+
+.crm-search {
+  width: 100%;
 }
 
 .crm-tag-form {
@@ -1106,6 +1110,7 @@ textarea:focus {
 }
 
 .tag-control,
+.contact-name-form,
 .conversation-ad-form,
 .followup-form {
   display: grid;
@@ -1113,6 +1118,7 @@ textarea:focus {
 }
 
 .inline-control,
+.contact-name-form,
 .conversation-ad-form,
 .followup-form {
   display: grid;
@@ -1133,9 +1139,11 @@ textarea:focus {
 
 .message-thread {
   display: grid;
-  align-content: end;
+  align-content: start;
+  grid-auto-rows: max-content;
   gap: 10px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: var(--radius);
   background:
@@ -1203,6 +1211,11 @@ textarea:focus {
 }
 
 .reply-media-fields {
+  display: grid;
+  gap: 8px;
+}
+
+.reply-actions {
   display: grid;
   gap: 8px;
 }
@@ -1339,6 +1352,7 @@ textarea:focus {
 
   .crm-tag-form,
   .thread-action-grid,
+  .contact-name-form,
   .conversation-ad-form,
   .followup-form,
   .inline-control {

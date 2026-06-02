@@ -899,10 +899,32 @@ function getChannelLabel(channel) {
   }[channel] || channel;
 }
 
+function getConversationDisplayName(conversation) {
+  return conversation?.customName || conversation?.name || conversation?.phone || conversation?.contactId || "";
+}
+
+function getConversationSearchText(conversation) {
+  const attribution = getConversationAttribution(conversation);
+  return [
+    getConversationDisplayName(conversation),
+    conversation.phone,
+    conversation.contactId,
+    conversation.lastMessage,
+    attribution?.ad,
+    attribution?.campaign,
+    conversationTags(conversation).map((tag) => tag.name).join(" "),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
 function getConversationRows() {
   const filter = document.getElementById("crmChannelFilter")?.value || "all";
+  const query = (document.getElementById("crmSearch")?.value || "").trim().toLowerCase();
   return [...(state.conversations || [])]
     .filter((conversation) => filter === "all" || conversation.channel === filter)
+    .filter((conversation) => !query || getConversationSearchText(conversation).includes(query))
     .sort((a, b) => new Date(b.lastAt || 0) - new Date(a.lastAt || 0));
 }
 
@@ -916,6 +938,8 @@ function renderCrm() {
   const thread = document.getElementById("messageThread");
   const header = document.getElementById("threadHeader");
   if (!list || !thread || !header) return;
+  const previousThreadConversationId = thread.dataset.conversationId || "";
+  const threadWasNearBottom = thread.scrollTop + thread.clientHeight >= thread.scrollHeight - 80;
 
   const conversations = getConversationRows();
   if (!activeConversationId && conversations.length) activeConversationId = conversations[0].id;
@@ -934,7 +958,7 @@ function renderCrm() {
         return `
           <button class="conversation-item ${conversation.id === activeConversationId ? "active" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button">
             <span class="channel-pill ${escapeHtml(conversation.channel)}">${getChannelLabel(conversation.channel)}</span>
-            <strong>${escapeHtml(conversation.name || conversation.phone || conversation.contactId)}</strong>
+            <strong>${escapeHtml(getConversationDisplayName(conversation))}</strong>
             <small>${escapeHtml(conversation.lastMessage || "")}</small>
             ${attribution ? `<small class="conversation-attribution">${escapeHtml(attribution.ad || attribution.campaign || "Anuncio atribuido")}</small>` : ""}
             ${due ? `<small class="conversation-due ${due === "Vencido" ? "is-due" : ""}">${escapeHtml(due)}</small>` : ""}
@@ -969,15 +993,22 @@ function renderCrm() {
   const availableTags = getCrmTags().filter((tag) => !activeTagIds.has(tag.id));
   const followUpTag = activeTags.find(isFollowUpTag);
   const suggestedFollowUpAt = active.followUpAt || (followUpTag ? addDays(today(), Number(followUpTag.followUpDays || 3)) : "");
+  const messages = [...(state.messages || [])]
+    .filter((message) => message.conversationId === activeConversationId)
+    .sort((a, b) => new Date(a.at || 0) - new Date(b.at || 0));
   header.innerHTML = `
     <div class="thread-title-row">
       <div>
-        <h2>${escapeHtml(active.name || active.phone || active.contactId)}</h2>
-        <p>${getChannelLabel(active.channel)}${active.phone ? ` · ${escapeHtml(active.phone)}` : ""}${activeAttribution ? ` · ${escapeHtml(activeAttribution.ad || activeAttribution.campaign)}` : ""}</p>
+        <h2>${escapeHtml(getConversationDisplayName(active))}</h2>
+        <p>${getChannelLabel(active.channel)}${active.phone ? ` · ${escapeHtml(active.phone)}` : ""}${activeAttribution ? ` · ${escapeHtml(activeAttribution.ad || activeAttribution.campaign)}` : ""} · ${messages.length} mensajes</p>
       </div>
       <button class="secondary-button compact" data-open-sale-from-conversation type="button">Registrar venta</button>
     </div>
     <div class="thread-action-grid">
+      <form class="contact-name-form" data-contact-name-form>
+        <input name="name" placeholder="Nombre del contacto" value="${escapeHtml(getConversationDisplayName(active))}" />
+        <button class="secondary-button compact" type="submit">Guardar nombre</button>
+      </form>
       <div class="tag-control">
         <div class="tag-chip-row">
           ${
@@ -1015,10 +1046,6 @@ function renderCrm() {
     </div>
   `;
 
-  const messages = [...(state.messages || [])]
-    .filter((message) => message.conversationId === activeConversationId)
-    .sort((a, b) => new Date(a.at || 0) - new Date(b.at || 0));
-
   thread.innerHTML = messages.length
     ? messages
         .map(
@@ -1032,7 +1059,10 @@ function renderCrm() {
         )
         .join("")
     : `<div class="empty">Todavía no hay mensajes guardados.</div>`;
-  thread.scrollTop = thread.scrollHeight;
+  thread.dataset.conversationId = activeConversationId;
+  if (previousThreadConversationId !== activeConversationId || threadWasNearBottom) {
+    thread.scrollTop = thread.scrollHeight;
+  }
 }
 
 function renderMessageAttachments(attachments = []) {
@@ -1215,6 +1245,17 @@ async function saveConversationFollowUp(event) {
   );
 }
 
+async function saveContactName(event) {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.currentTarget));
+  const name = String(data.name || "").trim();
+  if (!name) {
+    toast("Escribe un nombre");
+    return;
+  }
+  await saveConversationPatch({ name, customName: name }, "Nombre guardado");
+}
+
 async function createCrmTag(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -1252,6 +1293,30 @@ async function runFollowups() {
   } catch (error) {
     toast(error.message);
   }
+}
+
+function openWhatsAppDraft() {
+  const conversation = getActiveConversation();
+  const form = document.getElementById("replyForm");
+  if (!conversation || conversation.channel !== "whatsapp") {
+    toast("Este acceso directo solo aplica para WhatsApp");
+    return;
+  }
+  const text = form.elements.text.value.trim();
+  const mediaUrl = form.elements.mediaUrl.value.trim();
+  const draft = [text, mediaUrl].filter(Boolean).join("\n");
+  if (!draft) {
+    toast("Escribe un mensaje o URL primero");
+    return;
+  }
+  const phone = normalizePhone(conversation.phone);
+  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(draft)}`, "_blank", "noopener,noreferrer");
+  toast("Se abrió WhatsApp con el texto listo");
+}
+
+function isWhatsAppPermissionError(error) {
+  const message = String(error?.message || "");
+  return message.includes("(#200)") || message.toLowerCase().includes("necessary permissions") || message.toLowerCase().includes("permiso");
 }
 
 function applyRemoteState(remoteState) {
@@ -1472,6 +1537,7 @@ document.querySelectorAll("[data-open-sale]").forEach((button) => {
 document.getElementById("saleForm").addEventListener("submit", handleSaleSubmit);
 document.getElementById("crmTagForm").addEventListener("submit", createCrmTag);
 document.getElementById("runFollowups").addEventListener("click", runFollowups);
+document.getElementById("openWhatsAppDraft").addEventListener("click", openWhatsAppDraft);
 document.getElementById("statusFilter").addEventListener("change", renderPerformance);
 document.getElementById("syncAds").addEventListener("click", syncAdsFromMeta);
 document.getElementById("refreshMetaSetup").addEventListener("click", refreshMetaSetup);
@@ -1515,6 +1581,10 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("submit", (event) => {
+  if (event.target.matches("[data-contact-name-form]")) {
+    saveContactName(event);
+    return;
+  }
   if (event.target.matches("[data-conversation-ad-form]")) {
     saveConversationAd(event);
     return;
@@ -1559,6 +1629,10 @@ document.getElementById("exportSpendCsv").addEventListener("click", () => {
 
 document.getElementById("importCsv").addEventListener("click", importCsv);
 document.getElementById("crmChannelFilter").addEventListener("change", () => {
+  activeConversationId = "";
+  renderCrm();
+});
+document.getElementById("crmSearch").addEventListener("input", () => {
   activeConversationId = "";
   renderCrm();
 });
@@ -1615,6 +1689,7 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
         phone: conversation.phone,
         contactId: conversation.contactId,
         name: conversation.name,
+        customName: conversation.customName || "",
         text,
         mediaUrl,
         mediaType,
@@ -1625,6 +1700,10 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
     render();
     toast(mediaUrl ? "Mensaje con adjunto enviado" : "Mensaje enviado");
   } catch (error) {
+    if (isWhatsAppPermissionError(error)) {
+      toast("Meta no permite enviar con el token actual. Usa Abrir WhatsApp o configura el token COEX de envio.");
+      return;
+    }
     toast(error.message);
   }
 });
