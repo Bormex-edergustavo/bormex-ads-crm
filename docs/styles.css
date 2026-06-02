@@ -841,6 +841,14 @@ textarea:focus {
   background: rgba(248, 250, 252, 0.7);
 }
 
+.connection-panel.compact {
+  padding: 11px 12px;
+}
+
+.connection-panel.compact p {
+  font-size: 12px;
+}
+
 .connection-panel strong {
   display: block;
   margin-bottom: 4px;
@@ -919,7 +927,8 @@ textarea:focus {
 
 .crm-list-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
 }
 
 .conversation-list {

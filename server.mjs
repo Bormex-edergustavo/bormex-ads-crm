@@ -58,11 +58,19 @@ const server = http.createServer(async (req, res) => {
       await saveRuntimeConfig(body);
       return json(res, {
         metaAdsConfigured: Boolean(metaAdsAccessToken() && process.env.META_AD_ACCOUNT_ID),
-        whatsappWebhookConfigured: Boolean(process.env.WHATSAPP_VERIFY_TOKEN),
+        whatsappWebhookConfigured: Boolean(metaWebhookVerifyToken()),
         whatsappPhoneConfigured: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID),
         whatsappApiConfigured: Boolean(whatsappAccessToken() && process.env.WHATSAPP_PHONE_NUMBER_ID),
+        whatsappCoexistenceReady: Boolean(metaWebhookVerifyToken() && whatsappAccessToken() && process.env.WHATSAPP_PHONE_NUMBER_ID),
+        messengerWebhookConfigured: Boolean(metaWebhookVerifyToken()),
+        messengerApiConfigured: Boolean(messengerAccessToken()),
+        messengerPageConfigured: Boolean(messengerPageId()),
+        instagramWebhookConfigured: Boolean(metaWebhookVerifyToken()),
+        instagramApiConfigured: Boolean(instagramAccessToken()),
+        instagramAccountConfigured: Boolean(instagramAccountId()),
         adAccountId: maskValue(process.env.META_AD_ACCOUNT_ID),
         webhookPath: "/webhooks/whatsapp",
+        metaWebhookPath: "/webhooks/meta",
         graphVersion: graphVersion(),
         panelAuthConfigured: Boolean(process.env.PANEL_PASSWORD),
         adsSyncIntervalMinutes: Math.round(ADS_SYNC_INTERVAL_MS / 60000),
@@ -73,11 +81,19 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/config") {
       return json(res, {
         metaAdsConfigured: Boolean(metaAdsAccessToken() && process.env.META_AD_ACCOUNT_ID),
-        whatsappWebhookConfigured: Boolean(process.env.WHATSAPP_VERIFY_TOKEN),
+        whatsappWebhookConfigured: Boolean(metaWebhookVerifyToken()),
         whatsappPhoneConfigured: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID),
         whatsappApiConfigured: Boolean(whatsappAccessToken() && process.env.WHATSAPP_PHONE_NUMBER_ID),
+        whatsappCoexistenceReady: Boolean(metaWebhookVerifyToken() && whatsappAccessToken() && process.env.WHATSAPP_PHONE_NUMBER_ID),
+        messengerWebhookConfigured: Boolean(metaWebhookVerifyToken()),
+        messengerApiConfigured: Boolean(messengerAccessToken()),
+        messengerPageConfigured: Boolean(messengerPageId()),
+        instagramWebhookConfigured: Boolean(metaWebhookVerifyToken()),
+        instagramApiConfigured: Boolean(instagramAccessToken()),
+        instagramAccountConfigured: Boolean(instagramAccountId()),
         adAccountId: maskValue(process.env.META_AD_ACCOUNT_ID),
         webhookPath: "/webhooks/whatsapp",
+        metaWebhookPath: "/webhooks/meta",
         graphVersion: graphVersion(),
         panelAuthConfigured: Boolean(process.env.PANEL_PASSWORD),
         adsSyncIntervalMinutes: Math.round(ADS_SYNC_INTERVAL_MS / 60000),
@@ -294,8 +310,28 @@ function metaAdsAccessToken() {
   return process.env.META_ADS_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN || "";
 }
 
+function metaWebhookVerifyToken() {
+  return process.env.META_WEBHOOK_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN || "";
+}
+
 function whatsappAccessToken() {
   return process.env.WHATSAPP_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN || "";
+}
+
+function messengerAccessToken() {
+  return process.env.MESSENGER_PAGE_ACCESS_TOKEN || process.env.META_PAGE_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN || "";
+}
+
+function messengerPageId() {
+  return process.env.MESSENGER_PAGE_ID || process.env.FACEBOOK_PAGE_ID || process.env.META_PAGE_ID || "";
+}
+
+function instagramAccessToken() {
+  return process.env.INSTAGRAM_ACCESS_TOKEN || process.env.META_INSTAGRAM_ACCESS_TOKEN || process.env.META_PAGE_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN || "";
+}
+
+function instagramAccountId() {
+  return process.env.INSTAGRAM_ACCOUNT_ID || process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID || process.env.META_INSTAGRAM_ACCOUNT_ID || process.env.IG_ID || "";
 }
 
 function isPublicPath(pathname) {
@@ -505,7 +541,7 @@ function centsToMoney(value) {
 }
 
 function verifyWhatsAppWebhook(url, res) {
-  const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
+  const verifyToken = metaWebhookVerifyToken();
   if (!verifyToken) return text(res, "Webhook sin configurar", 500);
   const mode = url.searchParams.get("hub.mode");
   const token = url.searchParams.get("hub.verify_token");
@@ -517,7 +553,7 @@ function verifyWhatsAppWebhook(url, res) {
 async function sendCrmMessage(body) {
   const channel = String(body.channel || "").trim();
   const conversationId = String(body.conversationId || "").trim();
-  const to = normalizePhone(body.to || body.phone || "");
+  const to = normalizeChannelRecipient(channel, body.to || body.phone || body.contactId || "");
   const textBody = String(body.text || "").trim();
   if (!channel || !conversationId || !to || !textBody) {
     throw new Error("Faltan datos para enviar el mensaje");
@@ -526,8 +562,12 @@ async function sendCrmMessage(body) {
   let providerMessageId = `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   if (channel === "whatsapp") {
     providerMessageId = await sendWhatsAppText(to, textBody);
+  } else if (channel === "messenger") {
+    providerMessageId = await sendMessengerText(to, textBody);
+  } else if (channel === "instagram") {
+    providerMessageId = await sendInstagramText(to, textBody);
   } else {
-    throw new Error(`El envio por ${channel} queda pendiente de configurar con Meta`);
+    throw new Error(`Canal no soportado: ${channel}`);
   }
 
   const now = new Date().toISOString();
@@ -536,7 +576,7 @@ async function sendCrmMessage(body) {
       id: conversationId,
       channel,
       contactId: to,
-      phone: to,
+      phone: channel === "whatsapp" ? to : "",
       name: String(body.name || to),
       lastMessage: textBody,
       lastAt: now,
@@ -547,13 +587,25 @@ async function sendCrmMessage(body) {
       conversationId,
       channel,
       direction: "outbound",
-      from: process.env.WHATSAPP_PHONE_NUMBER_ID || "crm",
+      from: channelSenderId(channel),
       to,
       text: textBody,
       at: now,
       status: "sent",
     },
   };
+}
+
+function normalizeChannelRecipient(channel, value) {
+  if (channel === "whatsapp") return normalizePhone(value);
+  return String(value || "").trim();
+}
+
+function channelSenderId(channel) {
+  if (channel === "whatsapp") return process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.WHATSAPP_DISPLAY_PHONE_NUMBER || "crm";
+  if (channel === "messenger") return messengerPageId() || "page";
+  if (channel === "instagram") return instagramAccountId() || "instagram";
+  return "crm";
 }
 
 async function sendWhatsAppText(to, textBody) {
@@ -579,6 +631,68 @@ async function sendWhatsAppText(to, textBody) {
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error?.message || "Meta no acepto el mensaje de WhatsApp");
   return payload.messages?.[0]?.id || `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+async function sendMessengerText(to, textBody) {
+  const token = messengerAccessToken();
+  if (!token) throw new Error("Falta MESSENGER_PAGE_ACCESS_TOKEN o META_PAGE_ACCESS_TOKEN para Messenger");
+  const response = await fetch(`https://graph.facebook.com/${graphVersion()}/me/messages`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_type: "RESPONSE",
+      recipient: { id: to },
+      message: { text: textBody },
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error?.message || "Meta no acepto el mensaje de Messenger");
+  return payload.message_id || `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+async function sendInstagramText(to, textBody) {
+  const token = instagramAccessToken();
+  if (!token) throw new Error("Falta INSTAGRAM_ACCESS_TOKEN o META_INSTAGRAM_ACCESS_TOKEN para Instagram");
+  const accountId = instagramAccountId() || "me";
+  const response = await fetch(`https://graph.instagram.com/${graphVersion()}/${accountId}/messages`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      recipient: { id: to },
+      message: { text: textBody },
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    const fallbackToken = messengerAccessToken();
+    if (fallbackToken && fallbackToken !== token) return sendInstagramTextViaMessengerApi(to, textBody, fallbackToken);
+    throw new Error(payload.error?.message || "Meta no acepto el mensaje de Instagram");
+  }
+  return payload.message_id || payload.messages?.[0]?.id || `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+async function sendInstagramTextViaMessengerApi(to, textBody, token) {
+  const response = await fetch(`https://graph.facebook.com/${graphVersion()}/me/messages`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_type: "RESPONSE",
+      recipient: { id: to },
+      message: { text: textBody },
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error?.message || "Meta no acepto el mensaje de Instagram");
+  return payload.message_id || `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
 function extractWhatsAppEvents(payload) {
@@ -652,12 +766,54 @@ function getWhatsAppMessageItems(value) {
     value.message_echoes,
     value.smb_message_echoes,
     value.echoes,
+    value.history?.messages,
+    value.history?.data?.messages,
+    value.history?.payload?.messages,
+    value.history,
   ];
-  return candidates.flatMap((candidate) => {
+  const direct = candidates.flatMap((candidate) => {
     if (Array.isArray(candidate)) return candidate;
     if (candidate && typeof candidate === "object") return [candidate];
     return [];
-  });
+  }).filter(looksLikeWhatsAppMessage);
+  if (direct.length) return direct;
+  return collectNestedWhatsAppMessages(value);
+}
+
+function collectNestedWhatsAppMessages(root) {
+  const found = new Map();
+  const visit = (node, depth = 0) => {
+    if (!node || depth > 8) return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item, depth + 1);
+      return;
+    }
+    if (typeof node !== "object") return;
+    if (looksLikeWhatsAppMessage(node)) {
+      found.set(String(node.id || `${node.from || ""}_${node.to || ""}_${node.timestamp || Math.random()}`), node);
+    }
+    for (const value of Object.values(node)) visit(value, depth + 1);
+  };
+  visit(root);
+  return [...found.values()];
+}
+
+function looksLikeWhatsAppMessage(value) {
+  if (!value || typeof value !== "object") return false;
+  const hasSenderOrRecipient = Boolean(value.from || value.to || value.recipient_id || value.sender || value.recipient);
+  const hasMessageShape = Boolean(
+    value.text ||
+      value.button ||
+      value.interactive ||
+      value.image ||
+      value.video ||
+      value.audio ||
+      value.document ||
+      value.sticker ||
+      value.reaction ||
+      value.type,
+  );
+  return hasSenderOrRecipient && hasMessageShape;
 }
 
 function isWhatsAppEcho(message, field, fromPhone, businessPhone) {
@@ -673,41 +829,83 @@ function isWhatsAppEcho(message, field, fromPhone, businessPhone) {
 }
 
 function extractMetaMessagingEvents(payload) {
-  const channel = payload.object === "instagram" ? "instagram" : "messenger";
   const conversations = [];
   const messages = [];
   for (const entry of payload.entry || []) {
     for (const event of entry.messaging || []) {
+      const channel = getMetaMessagingChannel(payload, entry, event);
       const sender = String(event.sender?.id || "");
       const recipient = String(event.recipient?.id || "");
-      if (!sender || !event.message) continue;
-      const conversationId = `${channel}_${sender}`;
-      const textBody = event.message.text || "[mensaje sin texto]";
+      if (!sender || (!event.message && !event.postback)) continue;
+      const isEcho = isMetaMessageEcho(entry, event, channel);
+      const contactId = isEcho ? recipient : sender;
+      if (!contactId) continue;
+      const conversationId = `${channel}_${contactId}`;
+      const textBody = extractMetaMessageText(event);
       const at = event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString();
       conversations.push({
         id: conversationId,
         channel,
-        contactId: sender,
+        contactId,
         phone: "",
-        name: sender,
+        name: contactId,
         lastMessage: textBody,
         lastAt: at,
-        unread: 1,
+        unread: isEcho ? 0 : 1,
       });
       messages.push({
-        id: event.message.mid || `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        id: event.message?.mid || event.postback?.mid || `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`,
         conversationId,
         channel,
-        direction: "inbound",
+        direction: isEcho ? "outbound" : "inbound",
         from: sender,
         to: recipient,
         text: textBody,
         at,
-        status: "received",
+        status: isEcho ? "sent" : "received",
+        attachments: extractMetaMessageAttachments(event.message || {}),
+        referral: event.referral || event.message?.referral || null,
       });
     }
   }
   return { conversations, messages };
+}
+
+function getMetaMessagingChannel(payload, entry, event) {
+  const object = String(payload.object || "").toLowerCase();
+  if (object.includes("instagram")) return "instagram";
+  if (event.message?.is_echo && instagramAccountId() && String(event.sender?.id || "") === instagramAccountId()) return "instagram";
+  if (instagramAccountId() && String(entry.id || "") === instagramAccountId()) return "instagram";
+  return "messenger";
+}
+
+function isMetaMessageEcho(entry, event, channel) {
+  const sender = String(event.sender?.id || "");
+  const recipient = String(event.recipient?.id || "");
+  const businessId = channel === "instagram" ? instagramAccountId() : messengerPageId();
+  return Boolean(
+    event.message?.is_echo === true ||
+      event.message?.app_id ||
+      (businessId && sender === businessId) ||
+      (entry.id && sender === String(entry.id) && recipient),
+  );
+}
+
+function extractMetaMessageText(event) {
+  if (event.message?.text) return event.message.text;
+  if (event.postback?.title) return event.postback.title;
+  if (event.postback?.payload) return event.postback.payload;
+  if (event.message?.quick_reply?.payload) return event.message.quick_reply.payload;
+  if (event.message?.attachments?.length) return `[${event.message.attachments.map((item) => item.type || "archivo").join(", ")}]`;
+  return "[mensaje sin texto]";
+}
+
+function extractMetaMessageAttachments(message) {
+  return (message.attachments || []).map((attachment) => ({
+    type: attachment.type || "",
+    url: attachment.payload?.url || "",
+    title: attachment.title || "",
+  }));
 }
 
 function extractMessageText(message) {
@@ -742,7 +940,18 @@ function upsertLeads(existing, incoming) {
 
 function upsertById(existing, incoming) {
   const map = new Map(existing.map((item) => [item.id, item]));
-  for (const item of incoming) map.set(item.id, { ...map.get(item.id), ...item });
+  for (const item of incoming) {
+    const previous = map.get(item.id);
+    if (!previous) {
+      map.set(item.id, item);
+      continue;
+    }
+    const previousAt = Date.parse(String(previous.lastAt || previous.at || ""));
+    const nextAt = Date.parse(String(item.lastAt || item.at || ""));
+    if (Number.isFinite(nextAt) && (!Number.isFinite(previousAt) || nextAt >= previousAt)) {
+      map.set(item.id, { ...previous, ...item });
+    }
+  }
   return [...map.values()];
 }
 

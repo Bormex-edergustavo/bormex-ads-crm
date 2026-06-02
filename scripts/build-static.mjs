@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const outDir = join(root, "dist");
+const docsDir = join(root, "docs");
 const apiBase =
   process.env.BORMEX_API_BASE ||
   "https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm";
@@ -20,13 +21,17 @@ const configuredHtml = html.replace(
   `<meta name="bormex-api-base" content="${apiBase}" />`,
 );
 
-await rm(outDir, { recursive: true, force: true });
-await mkdir(outDir, { recursive: true });
-await Promise.all([
-  writeFile(join(outDir, "index.html"), configuredHtml),
-  writeFile(join(outDir, "styles.css"), css),
-  writeFile(join(outDir, "app.js"), js),
-  writeFile(join(outDir, "privacy.html"), privacy),
-]);
+async function writeStaticFiles(targetDir) {
+  await rm(targetDir, { recursive: true, force: true });
+  await mkdir(targetDir, { recursive: true });
+  await Promise.all([
+    writeFile(join(targetDir, "index.html"), configuredHtml),
+    writeFile(join(targetDir, "styles.css"), css),
+    writeFile(join(targetDir, "app.js"), js),
+    writeFile(join(targetDir, "privacy.html"), privacy),
+  ]);
+}
 
-console.log(`Static frontend built in dist/ with API ${apiBase}`);
+await Promise.all([writeStaticFiles(outDir), writeStaticFiles(docsDir)]);
+
+console.log(`Static frontend built in dist/ and docs/ with API ${apiBase}`);

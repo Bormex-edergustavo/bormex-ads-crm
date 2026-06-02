@@ -172,35 +172,66 @@ async function syncFromServer() {
 
 function renderConnectionStatus(config, remoteState) {
   const dots = document.querySelectorAll(".connection-dot");
+  const inboxDot = document.getElementById("inboxConnectionDot");
+  const whatsappDot = document.getElementById("whatsappConnectionDot");
+  const adsDot = document.getElementById("adsConnectionDot");
+  const inboxText = document.getElementById("inboxConnectionText");
   const whatsappText = document.getElementById("whatsappConnectionText");
   const adsText = document.getElementById("adsConnectionText");
   const syncButton = document.getElementById("syncAds");
+  const setConnected = (dot, connected) => {
+    if (!dot) return;
+    dot.classList.toggle("connected", connected);
+    dot.classList.toggle("pending", !connected);
+  };
 
   dots.forEach((dot) => dot.classList.remove("connected"));
   if (!serverAvailable) {
-    whatsappText.textContent = "No pude conectar con el backend. Revisa internet o intenta recargar el panel.";
-    adsText.textContent = "No pude conectar con el backend para sincronizar anuncios activos desde Meta Ads API.";
-    syncButton.disabled = true;
+    if (inboxText) inboxText.textContent = "No pude conectar con el backend del inbox.";
+    if (whatsappText) whatsappText.textContent = "No pude conectar con el backend. Revisa internet o intenta recargar el panel.";
+    if (adsText) adsText.textContent = "No pude conectar con el backend para sincronizar anuncios activos desde Meta Ads API.";
+    if (syncButton) syncButton.disabled = true;
     return;
   }
 
-  syncButton.disabled = !config.metaAdsConfigured;
+  const inboxReady = Boolean(config.whatsappWebhookConfigured || config.messengerWebhookConfigured || config.instagramWebhookConfigured);
+  setConnected(inboxDot, inboxReady);
+  if (inboxText) {
+    const inbound = [
+      config.whatsappWebhookConfigured ? "WhatsApp" : "",
+      config.messengerWebhookConfigured ? "Messenger" : "",
+      config.instagramWebhookConfigured ? "Instagram" : "",
+    ].filter(Boolean);
+    const outbound = [
+      config.whatsappApiConfigured ? "WhatsApp" : "",
+      config.messengerApiConfigured ? "Messenger" : "",
+      config.instagramApiConfigured ? "Instagram" : "",
+    ].filter(Boolean);
+    inboxText.textContent = `Entrada: ${inbound.join(", ") || "pendiente"}. Respuesta CRM: ${outbound.join(", ") || "pendiente"}. Último evento: ${remoteState.lastWebhookAt || "todavía ninguno"}.`;
+  }
+
+  if (syncButton) syncButton.disabled = !config.metaAdsConfigured;
   if (config.whatsappWebhookConfigured) {
-    dots[0].classList.add("connected");
+    setConnected(whatsappDot, true);
     const phoneStatus = config.whatsappPhoneConfigured ? "Número real configurado." : "Falta WHATSAPP_PHONE_NUMBER_ID para responder desde el CRM.";
-    whatsappText.textContent = `Webhook guardado. ${phoneStatus} Último evento recibido: ${remoteState.lastWebhookAt || "todavía ninguno"}. Los contactos aparecerán cuando Meta entregue mensajes reales de producción.`;
+    const coexistenceStatus = config.whatsappCoexistenceReady
+      ? "Preparado para coexistencia; no requiere desregistrar la app."
+      : "Faltan datos para operar coexistencia completa.";
+    if (whatsappText) whatsappText.textContent = `Webhook guardado. ${phoneStatus} ${coexistenceStatus} Último evento recibido: ${remoteState.lastWebhookAt || "todavía ninguno"}.`;
   } else {
-    whatsappText.textContent = "Falta WHATSAPP_VERIFY_TOKEN en .env para verificar el webhook de Meta.";
+    setConnected(whatsappDot, false);
+    if (whatsappText) whatsappText.textContent = "Falta META_WEBHOOK_VERIFY_TOKEN o WHATSAPP_VERIFY_TOKEN para verificar el webhook de Meta.";
   }
 
   if (config.metaAdsConfigured) {
-    dots[1].classList.add("connected");
+    setConnected(adsDot, true);
     const rangeText = remoteState.lastAdsRange
       ? ` Rango: ${remoteState.lastAdsRange.since} a ${remoteState.lastAdsRange.until}.`
       : "";
-    adsText.textContent = `Meta Ads configurado. Última sincronización: ${remoteState.lastAdsSync || "todavía ninguna"}.${rangeText} Auto-sync cada ${config.adsSyncIntervalMinutes || 15} minutos.`;
+    if (adsText) adsText.textContent = `Meta Ads configurado. Última sincronización: ${remoteState.lastAdsSync || "todavía ninguna"}.${rangeText} Auto-sync cada ${config.adsSyncIntervalMinutes || 15} minutos.`;
   } else {
-    adsText.textContent = "Faltan META_ACCESS_TOKEN y META_AD_ACCOUNT_ID en .env para leer anuncios activos.";
+    setConnected(adsDot, false);
+    if (adsText) adsText.textContent = "Faltan META_ACCESS_TOKEN y META_AD_ACCOUNT_ID en .env para leer anuncios activos.";
   }
 }
 
@@ -771,7 +802,7 @@ function renderCrm() {
   }
 
   if (!conversations.length) {
-    list.innerHTML = `<div class="empty">Aquí aparecerán las conversaciones 1 a 1 nuevas que entregue WhatsApp.</div>`;
+    list.innerHTML = `<div class="empty">Aquí aparecerán las conversaciones 1 a 1 nuevas que entreguen WhatsApp, Messenger e Instagram.</div>`;
   } else {
     list.innerHTML = conversations
       .map((conversation) => {
@@ -1216,8 +1247,9 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
       body: JSON.stringify({
         channel: conversation.channel,
         conversationId: conversation.id,
-        to: conversation.phone || conversation.contactId,
+        to: conversation.channel === "whatsapp" ? conversation.phone : conversation.contactId,
         phone: conversation.phone,
+        contactId: conversation.contactId,
         name: conversation.name,
         text,
       }),

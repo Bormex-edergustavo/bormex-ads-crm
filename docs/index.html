@@ -11,12 +11,12 @@
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
-          <span class="brand-mark">BX</span>
-          <div>
-            <strong>Bormex CRM</strong>
-            <span>Ads + WhatsApp</span>
+            <span class="brand-mark">BX</span>
+            <div>
+              <strong>Bormex CRM</strong>
+              <span>Ads + Inbox</span>
+            </div>
           </div>
-        </div>
 
         <nav class="nav" aria-label="Secciones">
           <button class="nav-item active" data-view="dashboard" type="button"><i data-lucide="layout-dashboard"></i><span>Panel</span></button>
@@ -165,6 +165,13 @@
                   <option value="instagram">Instagram</option>
                 </select>
               </div>
+              <div class="connection-panel compact">
+                <span class="connection-dot pending" id="inboxConnectionDot"></span>
+                <div>
+                  <strong>Inbox mixto</strong>
+                  <p id="inboxConnectionText">Esperando estado del backend.</p>
+                </div>
+              </div>
               <div class="conversation-list" id="conversationList"></div>
             </div>
 
@@ -274,7 +281,7 @@
               </div>
             </div>
             <div class="connection-panel">
-              <span class="connection-dot pending"></span>
+              <span class="connection-dot pending" id="whatsappConnectionDot"></span>
               <div>
                 <strong>Conexión pendiente</strong>
                 <p id="whatsappConnectionText">Los conteos por anuncio vienen de Meta Ads; aquí aparecerán los contactos con número cuando WhatsApp entregue el webhook real.</p>
@@ -317,7 +324,7 @@
               </div>
             </div>
             <div class="connection-panel">
-              <span class="connection-dot pending"></span>
+              <span class="connection-dot pending" id="adsConnectionDot"></span>
               <div>
                 <strong>Conexión pendiente</strong>
                 <p id="adsConnectionText">Cuando conectemos Meta Ads API, aquí aparecerán solo anuncios activos con gasto, presupuesto, campaña y métricas de mensajes.</p>
