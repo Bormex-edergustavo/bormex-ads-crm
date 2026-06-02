@@ -808,7 +808,10 @@ function extractWhatsAppEvents(payload) {
       const value = change.value || {};
       const businessPhone = normalizePhone(value.metadata?.display_phone_number || process.env.WHATSAPP_DISPLAY_PHONE_NUMBER || "");
       const contacts = new Map((value.contacts || []).map((contact) => [contact.wa_id, contact]));
-      for (const contact of getWhatsAppContactSyncItems(value)) {
+      const contactSyncItems = field.toLowerCase().includes("smb_app_state_sync") || value.smb_app_state_sync
+        ? getWhatsAppContactSyncItems(value)
+        : [];
+      for (const contact of contactSyncItems) {
         const phone = normalizePhone(
           contact.wa_id ||
             contact.phone_number ||

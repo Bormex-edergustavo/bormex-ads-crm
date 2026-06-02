@@ -1110,7 +1110,10 @@ function extractWhatsAppEvents(payload: any) {
       const value = change.value || {};
       const businessPhone = normalizePhone(value.metadata?.display_phone_number || Deno.env.get("WHATSAPP_DISPLAY_PHONE_NUMBER") || "");
       const contacts = new Map((value.contacts || []).map((contact: any) => [contact.wa_id, contact]));
-      for (const contact of getWhatsAppContactSyncItems(value)) {
+      const contactSyncItems = field.toLowerCase().includes("smb_app_state_sync") || value.smb_app_state_sync
+        ? getWhatsAppContactSyncItems(value)
+        : [];
+      for (const contact of contactSyncItems) {
         const phone = normalizePhone(
           contact.wa_id ||
             contact.phone_number ||
