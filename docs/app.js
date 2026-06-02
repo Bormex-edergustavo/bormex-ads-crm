@@ -985,11 +985,13 @@ function renderCrm() {
         const attribution = getConversationAttribution(conversation);
         const tags = conversationTags(conversation);
         const due = conversationDueStatus(conversation);
+        const unreadCount = Math.max(0, Number(conversation.unread || 0));
         return `
-          <button class="conversation-item ${conversation.id === activeConversationId ? "active" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button">
+          <button class="conversation-item ${conversation.id === activeConversationId ? "active" : ""} ${unreadCount ? "has-unread" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button">
             <span class="channel-pill ${escapeHtml(conversation.channel)}">${getChannelLabel(conversation.channel)}</span>
+            ${unreadCount ? `<span class="unread-badge" aria-label="${unreadCount} mensajes por contestar">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}
             <strong>${escapeHtml(getConversationDisplayName(conversation))}</strong>
-            <small>${escapeHtml(conversation.lastMessage || "")}</small>
+            <small class="conversation-preview">${escapeHtml(conversation.lastMessage || "")}</small>
             ${attribution ? `<small class="conversation-attribution">${escapeHtml(attribution.ad || attribution.campaign || "Anuncio atribuido")}</small>` : ""}
             ${due ? `<small class="conversation-due ${due === "Vencido" ? "is-due" : ""}">${escapeHtml(due)}</small>` : ""}
             ${
@@ -1051,6 +1053,15 @@ function renderCrm() {
               : `<span class="empty-inline">Sin etiquetas</span>`
           }
         </div>
+        <form class="tag-create-inline" data-crm-tag-form>
+          <input name="name" placeholder="Nueva etiqueta" required />
+          <select name="action" aria-label="Tipo de etiqueta">
+            <option value="none">Normal</option>
+            <option value="sale">Pago</option>
+            <option value="followup">Seguimiento</option>
+          </select>
+          <button class="secondary-button compact" type="submit">Crear</button>
+        </form>
         <div class="inline-control">
           <select id="crmTagSelect" aria-label="Agregar etiqueta">
             ${
@@ -1637,6 +1648,10 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("submit", (event) => {
+  if (event.target.matches("[data-crm-tag-form]")) {
+    createCrmTag(event);
+    return;
+  }
   if (event.target.matches("[data-contact-name-form]")) {
     saveContactName(event);
     return;

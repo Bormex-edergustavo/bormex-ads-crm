@@ -981,9 +981,11 @@ textarea:focus {
 }
 
 .conversation-item {
+  position: relative;
   display: grid;
+  align-content: start;
   gap: 6px;
-  min-height: 88px;
+  min-height: auto;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.58);
@@ -998,6 +1000,10 @@ textarea:focus {
     transform 160ms ease;
 }
 
+.conversation-item.has-unread {
+  padding-right: 52px;
+}
+
 .conversation-item.active,
 .conversation-item:hover {
   background: rgba(255, 255, 255, 0.94);
@@ -1008,6 +1014,9 @@ textarea:focus {
 
 .conversation-item strong,
 .conversation-item small {
+  display: block;
+  line-height: 1.35;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1022,9 +1031,35 @@ textarea:focus {
   color: var(--muted);
 }
 
+.conversation-item .conversation-preview {
+  display: -webkit-box;
+  min-height: 19px;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .conversation-item .conversation-attribution {
   color: var(--primary);
   font-weight: 900;
+}
+
+.unread-badge {
+  position: absolute;
+  right: 12px;
+  top: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1;
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.12);
 }
 
 .conversation-due {
@@ -1129,6 +1164,12 @@ textarea:focus {
 .conversation-ad-form,
 .followup-form {
   display: grid;
+  gap: 8px;
+}
+
+.tag-create-inline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 116px auto;
   gap: 8px;
 }
 
@@ -1408,6 +1449,7 @@ textarea:focus {
   .crm-tag-form,
   .thread-action-grid,
   .contact-name-form,
+  .tag-create-inline,
   .conversation-ad-form,
   .followup-form,
   .inline-control {
@@ -2892,11 +2934,13 @@ function renderCrm() {
         const attribution = getConversationAttribution(conversation);
         const tags = conversationTags(conversation);
         const due = conversationDueStatus(conversation);
+        const unreadCount = Math.max(0, Number(conversation.unread || 0));
         return `
-          <button class="conversation-item ${conversation.id === activeConversationId ? "active" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button">
+          <button class="conversation-item ${conversation.id === activeConversationId ? "active" : ""} ${unreadCount ? "has-unread" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button">
             <span class="channel-pill ${escapeHtml(conversation.channel)}">${getChannelLabel(conversation.channel)}</span>
+            ${unreadCount ? `<span class="unread-badge" aria-label="${unreadCount} mensajes por contestar">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}
             <strong>${escapeHtml(getConversationDisplayName(conversation))}</strong>
-            <small>${escapeHtml(conversation.lastMessage || "")}</small>
+            <small class="conversation-preview">${escapeHtml(conversation.lastMessage || "")}</small>
             ${attribution ? `<small class="conversation-attribution">${escapeHtml(attribution.ad || attribution.campaign || "Anuncio atribuido")}</small>` : ""}
             ${due ? `<small class="conversation-due ${due === "Vencido" ? "is-due" : ""}">${escapeHtml(due)}</small>` : ""}
             ${
@@ -2958,6 +3002,15 @@ function renderCrm() {
               : `<span class="empty-inline">Sin etiquetas</span>`
           }
         </div>
+        <form class="tag-create-inline" data-crm-tag-form>
+          <input name="name" placeholder="Nueva etiqueta" required />
+          <select name="action" aria-label="Tipo de etiqueta">
+            <option value="none">Normal</option>
+            <option value="sale">Pago</option>
+            <option value="followup">Seguimiento</option>
+          </select>
+          <button class="secondary-button compact" type="submit">Crear</button>
+        </form>
         <div class="inline-control">
           <select id="crmTagSelect" aria-label="Agregar etiqueta">
             ${
@@ -3544,6 +3597,10 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("submit", (event) => {
+  if (event.target.matches("[data-crm-tag-form]")) {
+    createCrmTag(event);
+    return;
+  }
   if (event.target.matches("[data-contact-name-form]")) {
     saveContactName(event);
     return;

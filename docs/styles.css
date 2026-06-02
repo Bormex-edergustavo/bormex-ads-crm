@@ -973,9 +973,11 @@ textarea:focus {
 }
 
 .conversation-item {
+  position: relative;
   display: grid;
+  align-content: start;
   gap: 6px;
-  min-height: 88px;
+  min-height: auto;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.58);
@@ -990,6 +992,10 @@ textarea:focus {
     transform 160ms ease;
 }
 
+.conversation-item.has-unread {
+  padding-right: 52px;
+}
+
 .conversation-item.active,
 .conversation-item:hover {
   background: rgba(255, 255, 255, 0.94);
@@ -1000,6 +1006,9 @@ textarea:focus {
 
 .conversation-item strong,
 .conversation-item small {
+  display: block;
+  line-height: 1.35;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1014,9 +1023,35 @@ textarea:focus {
   color: var(--muted);
 }
 
+.conversation-item .conversation-preview {
+  display: -webkit-box;
+  min-height: 19px;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .conversation-item .conversation-attribution {
   color: var(--primary);
   font-weight: 900;
+}
+
+.unread-badge {
+  position: absolute;
+  right: 12px;
+  top: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1;
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.12);
 }
 
 .conversation-due {
@@ -1121,6 +1156,12 @@ textarea:focus {
 .conversation-ad-form,
 .followup-form {
   display: grid;
+  gap: 8px;
+}
+
+.tag-create-inline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 116px auto;
   gap: 8px;
 }
 
@@ -1400,6 +1441,7 @@ textarea:focus {
   .crm-tag-form,
   .thread-action-grid,
   .contact-name-form,
+  .tag-create-inline,
   .conversation-ad-form,
   .followup-form,
   .inline-control {

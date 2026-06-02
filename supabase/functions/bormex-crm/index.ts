@@ -421,7 +421,17 @@ function compactItemsById(items: Array<Record<string, unknown>>) {
     const previousAt = Date.parse(String(previous.lastAt || previous.at || ""));
     const nextAt = Date.parse(String(item.lastAt || item.at || ""));
     if (Number.isFinite(nextAt) && (!Number.isFinite(previousAt) || nextAt >= previousAt)) {
-      map.set(id, { ...previous, ...item });
+      map.set(id, {
+        ...previous,
+        ...item,
+        unreadDelta: item.unreadReset ? 0 : Number(previous.unreadDelta || 0) + Number(item.unreadDelta || 0),
+      });
+    } else {
+      map.set(id, {
+        ...item,
+        ...previous,
+        unreadDelta: previous.unreadReset ? Number(previous.unreadDelta || 0) : Number(previous.unreadDelta || 0) + Number(item.unreadDelta || 0),
+      });
     }
   }
   return [...map.values()];
@@ -451,6 +461,19 @@ function mergeConversationData(existing: any, incoming: Record<string, unknown>)
       merged[field] = existing[field];
     }
   }
+  const existingUnread = Math.max(0, Number(existing?.unread || 0));
+  const unreadDelta = Math.max(0, Number(incoming.unreadDelta || 0));
+  if (incoming.unreadReset === true) {
+    merged.unread = 0;
+  } else if (unreadDelta > 0) {
+    merged.unread = existingUnread + unreadDelta;
+  } else if (existing?.unread !== undefined && Number(incoming.unread || 0) === 0) {
+    merged.unread = existingUnread;
+  } else if (!Object.prototype.hasOwnProperty.call(incoming, "unread") && existing?.unread !== undefined) {
+    merged.unread = existingUnread;
+  }
+  delete merged.unreadDelta;
+  delete merged.unreadReset;
   merged.tags = normalizeTagIds(merged.tags);
   if (merged.customName) merged.name = String(merged.customName);
   merged.updatedAt = String(incoming.updatedAt || new Date().toISOString());
@@ -720,6 +743,7 @@ async function sendCrmMessage(body: any) {
       lastMessage: textBody || `[${media.type}]`,
       lastAt: now,
       unread: 0,
+      unreadReset: true,
     },
     record: {
       id: providerMessageId,
@@ -1518,6 +1542,8 @@ function extractWhatsAppEvents(payload: any) {
           lastMessage: textBody,
           lastAt: at,
           unread: isEcho ? 0 : 1,
+          unreadDelta: isEcho ? 0 : 1,
+          unreadReset: isEcho,
           ...attribution,
         });
         messages.push({
@@ -1667,6 +1693,8 @@ function extractMetaMessagingEvents(payload: any) {
         lastMessage: textBody,
         lastAt: at,
         unread: isEcho ? 0 : 1,
+        unreadDelta: isEcho ? 0 : 1,
+        unreadReset: isEcho,
         ...attribution,
       });
       messages.push({
