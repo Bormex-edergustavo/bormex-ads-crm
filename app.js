@@ -13,6 +13,7 @@ const defaultState = {
   leads: [],
   spend: [],
   ads: [],
+  crmTags: [],
   campaignPeriods: [],
   rangeAds: [],
   rangeSpend: [],
@@ -164,6 +165,7 @@ async function syncFromServer() {
     state.leads = remoteState.leads || state.leads;
     state.spend = remoteState.spend || state.spend;
     state.ads = remoteState.ads || state.ads;
+    state.crmTags = remoteState.crmTags || state.crmTags;
     state.campaignPeriods = remoteState.campaignPeriods || state.campaignPeriods;
     state.rules = remoteState.rules || state.rules;
     renderConnectionStatus(config, remoteState, coexistenceSetup);
@@ -472,6 +474,60 @@ function findLeadForPhone(phoneValue) {
     .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
 }
 
+function defaultCrmTags() {
+  return [
+    { id: "tag_pago", name: "Pago pendiente", color: "#f97316", action: "sale", followUpDays: 0, notifyPhone: "" },
+    { id: "tag_retro", name: "Necesita retro", color: "#2563eb", action: "followup", followUpDays: 3, notifyPhone: "" },
+    { id: "tag_diseno", name: "Diseños", color: "#0ea5e9", action: "none", followUpDays: 0, notifyPhone: "" },
+  ];
+}
+
+function getCrmTags() {
+  return (state.crmTags && state.crmTags.length ? state.crmTags : defaultCrmTags()).filter((tag) => tag.name);
+}
+
+function getCrmTag(tagId) {
+  return getCrmTags().find((tag) => tag.id === tagId);
+}
+
+function conversationTagIds(conversation) {
+  return Array.isArray(conversation?.tags) ? conversation.tags : String(conversation?.tags || "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function conversationTags(conversation) {
+  return conversationTagIds(conversation).map(getCrmTag).filter(Boolean);
+}
+
+function isSaleTag(tag) {
+  return tag?.action === "sale" || /pago|pagad|anticipo|venta/i.test(tag?.name || "");
+}
+
+function isFollowUpTag(tag) {
+  return tag?.action === "followup" || /retro|seguimiento|pendiente/i.test(tag?.name || "");
+}
+
+function getConversationAttribution(conversation) {
+  const directAdId = normalizeAdId(conversation?.adId);
+  if (directAdId || conversation?.ad || conversation?.campaign) {
+    const matchedAd = findAdById(directAdId);
+    return {
+      source: conversation.attributionSource || "conversation",
+      adId: directAdId,
+      ad: conversation.ad || adName(matchedAd) || directAdId,
+      campaign: conversation.campaign || matchedAd?.campaign || "",
+    };
+  }
+  const lead = getConversationLead(conversation);
+  return lead ? { ...lead, source: "lead" } : null;
+}
+
+function conversationDueStatus(conversation) {
+  if (!conversation?.followUpAt) return "";
+  const due = String(conversation.followUpAt) <= today() && !conversation.followUpNotifiedAt;
+  if (due) return "Vencido";
+  return `Retro ${conversation.followUpAt}`;
+}
+
 function getPerformance() {
   const map = new Map();
   const liveAdKeys = new Set();
@@ -635,7 +691,7 @@ function renderAdIdOptions() {
   if (!datalist) return;
   const seen = new Set();
   const rows = [];
-  for (const ad of state.ads || []) {
+  for (const ad of [...(state.rangeAds || []), ...(state.ads || [])]) {
     const id = normalizeAdId(ad.id || ad.adId);
     if (!id || seen.has(id)) continue;
     seen.add(id);
@@ -872,13 +928,21 @@ function renderCrm() {
   } else {
     list.innerHTML = conversations
       .map((conversation) => {
-        const lead = getConversationLead(conversation);
+        const attribution = getConversationAttribution(conversation);
+        const tags = conversationTags(conversation);
+        const due = conversationDueStatus(conversation);
         return `
           <button class="conversation-item ${conversation.id === activeConversationId ? "active" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button">
             <span class="channel-pill ${escapeHtml(conversation.channel)}">${getChannelLabel(conversation.channel)}</span>
             <strong>${escapeHtml(conversation.name || conversation.phone || conversation.contactId)}</strong>
             <small>${escapeHtml(conversation.lastMessage || "")}</small>
-            ${lead ? `<small class="conversation-attribution">${escapeHtml(lead.ad || lead.campaign || "Anuncio atribuido")}</small>` : ""}
+            ${attribution ? `<small class="conversation-attribution">${escapeHtml(attribution.ad || attribution.campaign || "Anuncio atribuido")}</small>` : ""}
+            ${due ? `<small class="conversation-due ${due === "Vencido" ? "is-due" : ""}">${escapeHtml(due)}</small>` : ""}
+            ${
+              tags.length
+                ? `<span class="tag-mini-row">${tags.slice(0, 3).map((tag) => `<span class="tag-mini" style="--tag-color:${escapeHtml(tag.color)}">${escapeHtml(tag.name)}</span>`).join("")}</span>`
+                : ""
+            }
           </button>
         `;
       })
@@ -899,11 +963,55 @@ function renderCrm() {
   }
 
   document.getElementById("replyForm").classList.remove("disabled");
-  const activeLead = getConversationLead(active);
+  const activeAttribution = getConversationAttribution(active);
+  const activeTags = conversationTags(active);
+  const activeTagIds = new Set(conversationTagIds(active));
+  const availableTags = getCrmTags().filter((tag) => !activeTagIds.has(tag.id));
+  const followUpTag = activeTags.find(isFollowUpTag);
+  const suggestedFollowUpAt = active.followUpAt || (followUpTag ? addDays(today(), Number(followUpTag.followUpDays || 3)) : "");
   header.innerHTML = `
-    <div>
-      <h2>${escapeHtml(active.name || active.phone || active.contactId)}</h2>
-      <p>${getChannelLabel(active.channel)}${active.phone ? ` · ${escapeHtml(active.phone)}` : ""}${activeLead ? ` · ${escapeHtml(activeLead.ad || activeLead.campaign)}` : ""}</p>
+    <div class="thread-title-row">
+      <div>
+        <h2>${escapeHtml(active.name || active.phone || active.contactId)}</h2>
+        <p>${getChannelLabel(active.channel)}${active.phone ? ` · ${escapeHtml(active.phone)}` : ""}${activeAttribution ? ` · ${escapeHtml(activeAttribution.ad || activeAttribution.campaign)}` : ""}</p>
+      </div>
+      <button class="secondary-button compact" data-open-sale-from-conversation type="button">Registrar venta</button>
+    </div>
+    <div class="thread-action-grid">
+      <div class="tag-control">
+        <div class="tag-chip-row">
+          ${
+            activeTags.length
+              ? activeTags.map((tag) => `
+                <button class="tag-chip" data-remove-conversation-tag="${escapeHtml(tag.id)}" style="--tag-color:${escapeHtml(tag.color)}" type="button">
+                  ${escapeHtml(tag.name)}
+                </button>
+              `).join("")
+              : `<span class="empty-inline">Sin etiquetas</span>`
+          }
+        </div>
+        <div class="inline-control">
+          <select id="crmTagSelect" aria-label="Agregar etiqueta">
+            ${
+              availableTags.length
+                ? availableTags.map((tag) => `<option value="${escapeHtml(tag.id)}">${escapeHtml(tag.name)}</option>`).join("")
+                : `<option value="">Sin etiquetas disponibles</option>`
+            }
+          </select>
+          <button class="secondary-button compact" data-add-conversation-tag type="button" ${availableTags.length ? "" : "disabled"}>Agregar</button>
+        </div>
+      </div>
+      <form class="conversation-ad-form" data-conversation-ad-form>
+        <input name="adId" list="adIdOptions" placeholder="ID anuncio" value="${escapeHtml(activeAttribution?.adId || "")}" />
+        <input name="adName" placeholder="Nombre anuncio" value="${escapeHtml(activeAttribution?.ad || "")}" />
+        <button class="secondary-button compact" type="submit">Guardar anuncio</button>
+      </form>
+      <form class="followup-form" data-followup-form>
+        <input name="followUpAt" type="date" value="${escapeHtml(suggestedFollowUpAt)}" />
+        <input name="followUpContact" inputmode="tel" placeholder="Avisar a WhatsApp" value="${escapeHtml(active.followUpContact || followUpTag?.notifyPhone || "")}" />
+        <input name="followUpNote" placeholder="Nota de retro" value="${escapeHtml(active.followUpNote || "")}" />
+        <button class="secondary-button compact" type="submit">Guardar retro</button>
+      </form>
     </div>
   `;
 
@@ -916,8 +1024,8 @@ function renderCrm() {
         .map(
           (message) => `
             <div class="message-bubble ${message.direction === "outbound" ? "outbound" : "inbound"}">
-              <p>${escapeHtml(message.text || "")}</p>
-              ${message.attachments?.length ? `<small>${escapeHtml(message.attachments.map((item) => item.type).join(", "))}</small>` : ""}
+              ${message.text ? `<p>${escapeHtml(message.text)}</p>` : ""}
+              ${renderMessageAttachments(message.attachments)}
               <span>${new Date(message.at || Date.now()).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" })}</span>
             </div>
           `,
@@ -925,6 +1033,23 @@ function renderCrm() {
         .join("")
     : `<div class="empty">Todavía no hay mensajes guardados.</div>`;
   thread.scrollTop = thread.scrollHeight;
+}
+
+function renderMessageAttachments(attachments = []) {
+  if (!attachments?.length) return "";
+  return `
+    <div class="attachment-list">
+      ${attachments
+        .map((attachment) => {
+          const label = attachment.filename || attachment.title || attachment.caption || attachment.type || "archivo";
+          if (attachment.url) {
+            return `<a href="${escapeHtml(attachment.url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(label)}</a>`;
+          }
+          return `<small>${escapeHtml(label)}</small>`;
+        })
+        .join("")}
+    </div>
+  `;
 }
 
 async function handleSaleSubmit(event) {
@@ -943,6 +1068,7 @@ async function handleSaleSubmit(event) {
     product: products.join(", "),
     amount: parseMoney(data.amount),
     date: data.date || today(),
+    sourceConversationId: data.sourceConversationId || "",
   };
 
   applyManualAdAttribution(sale, data.adId);
@@ -991,6 +1117,143 @@ async function editSaleAdId(saleId) {
   await saveSale(updated, updated.adId ? "ID de anuncio guardado" : "ID de anuncio quitado");
 }
 
+function getActiveConversation() {
+  return (state.conversations || []).find((item) => item.id === activeConversationId);
+}
+
+async function saveConversationPatch(patch, message) {
+  const conversation = getActiveConversation();
+  if (!conversation) return;
+  const updated = { ...conversation, ...patch };
+  try {
+    if (serverAvailable) {
+      const remoteState = await api(`/api/conversations/${encodeURIComponent(conversation.id)}`, {
+        method: "POST",
+        body: JSON.stringify(updated),
+      });
+      applyRemoteState(remoteState);
+    } else {
+      state.conversations = (state.conversations || []).map((item) => (item.id === conversation.id ? updated : item));
+      saveState();
+    }
+    renderCrm();
+    toast(message);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function addTagToActiveConversation(tagId) {
+  const conversation = getActiveConversation();
+  const tag = getCrmTag(tagId);
+  if (!conversation || !tag) return;
+  const tags = [...new Set([...conversationTagIds(conversation), tag.id])];
+  const patch = { tags };
+  if (isFollowUpTag(tag) && !conversation.followUpAt) {
+    patch.followUpAt = addDays(today(), Number(tag.followUpDays || 3));
+    patch.followUpDays = Number(tag.followUpDays || 3);
+    patch.followUpContact = tag.notifyPhone || conversation.followUpContact || "";
+  }
+  await saveConversationPatch(patch, "Etiqueta guardada");
+  if (isSaleTag(tag)) prefillSaleFromConversation({ ...conversation, ...patch });
+}
+
+async function removeTagFromActiveConversation(tagId) {
+  const conversation = getActiveConversation();
+  if (!conversation) return;
+  await saveConversationPatch({ tags: conversationTagIds(conversation).filter((item) => item !== tagId) }, "Etiqueta quitada");
+}
+
+function prefillSaleFromConversation(conversation = getActiveConversation()) {
+  if (!conversation) return;
+  const form = document.getElementById("saleForm");
+  const attribution = getConversationAttribution(conversation);
+  setView("sales");
+  form.elements.phone.value = conversation.phone || "";
+  form.elements.amount.value = "";
+  form.elements.date.value = today();
+  form.elements.adId.value = attribution?.adId || "";
+  form.elements.sourceConversationId.value = conversation.id;
+  form.querySelectorAll('input[name="products"]').forEach((input) => {
+    input.checked = false;
+  });
+  form.elements.amount.focus();
+  toast("Venta precargada desde CRM");
+}
+
+async function saveConversationAd(event) {
+  event.preventDefault();
+  const conversation = getActiveConversation();
+  if (!conversation) return;
+  const data = Object.fromEntries(new FormData(event.currentTarget));
+  const adId = normalizeAdId(data.adId);
+  const matchedAd = findAdById(adId);
+  await saveConversationPatch(
+    {
+      adId,
+      ad: data.adName || adName(matchedAd) || "",
+      adset: matchedAd?.adset || conversation.adset || "",
+      campaign: matchedAd?.campaign || conversation.campaign || "",
+      campaignId: matchedAd?.campaignId || conversation.campaignId || "",
+      attributionSource: adId ? "manual_conversation_ad_id" : conversation.attributionSource || "",
+    },
+    "Anuncio guardado",
+  );
+}
+
+async function saveConversationFollowUp(event) {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.currentTarget));
+  await saveConversationPatch(
+    {
+      followUpAt: data.followUpAt || "",
+      followUpContact: normalizePhone(data.followUpContact),
+      followUpNote: data.followUpNote || "",
+      followUpNotifiedAt: "",
+    },
+    "Seguimiento guardado",
+  );
+}
+
+async function createCrmTag(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = Object.fromEntries(new FormData(form));
+  const tag = {
+    id: uid("tag"),
+    name: data.name,
+    color: data.action === "sale" ? "#f97316" : data.action === "followup" ? "#2563eb" : "#64748b",
+    action: data.action || "none",
+    followUpDays: Number(data.followUpDays || (data.action === "followup" ? 3 : 0)),
+    notifyPhone: normalizePhone(data.notifyPhone),
+  };
+  try {
+    if (serverAvailable) {
+      const remoteState = await api("/api/crm-tags", { method: "POST", body: JSON.stringify(tag) });
+      applyRemoteState(remoteState);
+    } else {
+      state.crmTags = [...getCrmTags(), tag];
+      saveState();
+    }
+    form.reset();
+    renderCrm();
+    toast("Etiqueta creada");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function runFollowups() {
+  try {
+    const result = await api("/api/followups/run", { method: "POST", body: JSON.stringify({}) });
+    await syncFromServer();
+    render();
+    toast(result.notified ? `Avisos enviados: ${result.notified}` : "No hay avisos vencidos");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 function applyRemoteState(remoteState) {
   state.conversations = remoteState.conversations || state.conversations;
   state.messages = remoteState.messages || state.messages;
@@ -998,6 +1261,7 @@ function applyRemoteState(remoteState) {
   state.leads = remoteState.leads || state.leads;
   state.spend = remoteState.spend || state.spend;
   state.ads = remoteState.ads || state.ads;
+  state.crmTags = remoteState.crmTags || state.crmTags;
   state.campaignPeriods = remoteState.campaignPeriods || state.campaignPeriods;
   state.rules = remoteState.rules || state.rules;
   saveState();
@@ -1206,6 +1470,8 @@ document.querySelectorAll("[data-open-sale]").forEach((button) => {
 });
 
 document.getElementById("saleForm").addEventListener("submit", handleSaleSubmit);
+document.getElementById("crmTagForm").addEventListener("submit", createCrmTag);
+document.getElementById("runFollowups").addEventListener("click", runFollowups);
 document.getElementById("statusFilter").addEventListener("change", renderPerformance);
 document.getElementById("syncAds").addEventListener("click", syncAdsFromMeta);
 document.getElementById("refreshMetaSetup").addEventListener("click", refreshMetaSetup);
@@ -1215,6 +1481,24 @@ document.addEventListener("click", (event) => {
   if (conversationButton) {
     activeConversationId = conversationButton.dataset.conversationId;
     renderCrm();
+    return;
+  }
+
+  const addTagButton = event.target.closest("[data-add-conversation-tag]");
+  if (addTagButton) {
+    addTagToActiveConversation(document.getElementById("crmTagSelect")?.value || "");
+    return;
+  }
+
+  const removeTagButton = event.target.closest("[data-remove-conversation-tag]");
+  if (removeTagButton) {
+    removeTagFromActiveConversation(removeTagButton.dataset.removeConversationTag);
+    return;
+  }
+
+  const openSaleButton = event.target.closest("[data-open-sale-from-conversation]");
+  if (openSaleButton) {
+    prefillSaleFromConversation();
     return;
   }
 
@@ -1228,6 +1512,16 @@ document.addEventListener("click", (event) => {
   if (!button) return;
   const collection = button.dataset.delete;
   deleteRecord(collection, button.dataset.id);
+});
+
+document.addEventListener("submit", (event) => {
+  if (event.target.matches("[data-conversation-ad-form]")) {
+    saveConversationAd(event);
+    return;
+  }
+  if (event.target.matches("[data-followup-form]")) {
+    saveConversationFollowUp(event);
+  }
 });
 
 async function deleteRecord(collection, id) {
@@ -1306,8 +1600,11 @@ document.querySelectorAll("[data-range-preset]").forEach((button) => {
 document.getElementById("replyForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const conversation = (state.conversations || []).find((item) => item.id === activeConversationId);
-  const text = event.currentTarget.elements.text.value.trim();
-  if (!conversation || !text) return;
+  const form = event.currentTarget;
+  const text = form.elements.text.value.trim();
+  const mediaUrl = form.elements.mediaUrl.value.trim();
+  const mediaType = form.elements.mediaType.value;
+  if (!conversation || (!text && !mediaUrl)) return;
   try {
     const remoteState = await api("/api/messages", {
       method: "POST",
@@ -1319,12 +1616,14 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
         contactId: conversation.contactId,
         name: conversation.name,
         text,
+        mediaUrl,
+        mediaType,
       }),
     });
-    event.currentTarget.reset();
+    form.reset();
     applyRemoteState(remoteState);
     render();
-    toast("Mensaje enviado");
+    toast(mediaUrl ? "Mensaje con adjunto enviado" : "Mensaje enviado");
   } catch (error) {
     toast(error.message);
   }

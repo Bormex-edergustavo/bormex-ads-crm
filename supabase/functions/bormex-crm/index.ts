@@ -5,6 +5,11 @@ const defaultDb = {
   leads: [],
   spend: [],
   ads: [],
+  crmTags: [
+    { id: "tag_pago", name: "Pago pendiente", color: "#f97316", action: "sale", followUpDays: 0, notifyPhone: "" },
+    { id: "tag_retro", name: "Necesita retro", color: "#2563eb", action: "followup", followUpDays: 3, notifyPhone: "" },
+    { id: "tag_diseno", name: "Diseños", color: "#0ea5e9", action: "none", followUpDays: 0, notifyPhone: "" },
+  ],
   campaignPeriods: [],
   rules: {
     targetCpa: 600,
@@ -102,6 +107,20 @@ Deno.serve(async (req) => {
       return json(await readDb());
     }
 
+    if (pathname.startsWith("/api/conversations/") && req.method === "POST") {
+      await updateConversation(decodeURIComponent(pathname.replace("/api/conversations/", "")), await readJson(req));
+      return json(filterStateForRole(await readDb(), accessRole));
+    }
+
+    if (pathname === "/api/crm-tags" && req.method === "POST") {
+      await saveCrmTag(await readJson(req));
+      return json(filterStateForRole(await readDb(), accessRole));
+    }
+
+    if (pathname === "/api/followups/run" && req.method === "POST") {
+      return json(await runFollowUpNotifications());
+    }
+
     if (pathname === "/api/sync/ads" && req.method === "POST") {
       const payload = await syncMetaAds(await readJson(req));
       await replaceCollection("ads", payload.ads);
@@ -122,6 +141,14 @@ Deno.serve(async (req) => {
       await setSetting("lastAdsSync", new Date().toISOString());
       await setSetting("lastAdsRange", payload.range);
       return json({ ok: true, ads: payload.ads.length });
+    }
+
+    if (pathname === "/api/cron/followups" && req.method === "POST") {
+      const secret = url.searchParams.get("secret") || req.headers.get("x-cron-secret") || "";
+      if (!Deno.env.get("CRON_SECRET") || secret !== Deno.env.get("CRON_SECRET")) {
+        return text("Forbidden", 403);
+      }
+      return json(await runFollowUpNotifications());
     }
 
     if (pathname === "/api/sales" && req.method === "POST") {
@@ -257,7 +284,7 @@ function configPayload(role = "") {
 }
 
 function isPublicPath(pathname: string) {
-  return ["/", "/index.html", "/health", "/webhooks/whatsapp", "/webhooks/meta", "/api/cron/sync", "/oauth/meta"].includes(pathname);
+  return ["/", "/index.html", "/health", "/webhooks/whatsapp", "/webhooks/meta", "/api/cron/sync", "/api/cron/followups", "/oauth/meta"].includes(pathname);
 }
 
 function getAccessRole(req: Request) {
@@ -322,6 +349,7 @@ async function readDb() {
     spend,
     ads,
     rules: settings.rules || defaultDb.rules,
+    crmTags: normalizeCrmTags(settings.crmTags || defaultDb.crmTags),
     campaignPeriods: settings.campaignPeriods || [],
     webhookEvents: settings.webhookEvents || [],
     lastCoexistenceSync: settings.lastCoexistenceSync || null,
@@ -357,7 +385,14 @@ async function setSetting(key: string, value: unknown) {
 async function upsertItems(collection: Collection, items: Array<Record<string, unknown>>) {
   if (!items.length) return;
   const table = tableMap[collection];
-  const rows = compactItemsById(items).map((item) => ({ id: String(item.id), data: item }));
+  const compacted = compactItemsById(items);
+  const existing = collection === "conversations" ? await readCollection("conversations") : [];
+  const existingById = new Map(existing.map((item: any) => [String(item.id || ""), item]));
+  const rows = compacted.map((item) => {
+    const id = String(item.id);
+    const data = collection === "conversations" ? mergeConversationData(existingById.get(id), item) : item;
+    return { id, data };
+  });
   const response = await supabaseFetch(`/rest/v1/${table}?on_conflict=id`, {
     method: "POST",
     headers: { prefer: "resolution=merge-duplicates" },
@@ -383,6 +418,115 @@ function compactItemsById(items: Array<Record<string, unknown>>) {
     }
   }
   return [...map.values()];
+}
+
+function mergeConversationData(existing: any, incoming: Record<string, unknown>) {
+  const merged: Record<string, unknown> = { ...(existing || {}), ...incoming };
+  for (const field of [
+    "tags",
+    "followUpAt",
+    "followUpDays",
+    "followUpContact",
+    "followUpNote",
+    "followUpNotifiedAt",
+    "crmNote",
+  ]) {
+    if (!Object.prototype.hasOwnProperty.call(incoming, field) && existing?.[field] !== undefined) {
+      merged[field] = existing[field];
+    }
+  }
+  for (const field of ["adId", "ad", "adset", "campaign", "campaignId", "ctwaClid", "sourceUrl", "attributionSource"]) {
+    if (!Object.prototype.hasOwnProperty.call(incoming, field) && existing?.[field] !== undefined) {
+      merged[field] = existing[field];
+    }
+    if (Object.prototype.hasOwnProperty.call(incoming, field) && !incoming[field] && existing?.[field] && !incoming.attributionSource) {
+      merged[field] = existing[field];
+    }
+  }
+  merged.tags = normalizeTagIds(merged.tags);
+  merged.updatedAt = String(incoming.updatedAt || new Date().toISOString());
+  return merged;
+}
+
+async function updateConversation(id: string, body: any) {
+  if (!id) throw new HttpError(400, "Falta id de conversación");
+  const existing = (await readCollection("conversations")).find((item: any) => String(item.id || "") === id) || {};
+  const conversation = normalizeConversationPatch({ ...existing, ...body, id });
+  await upsertItems("conversations", [conversation]);
+  return conversation;
+}
+
+function normalizeConversationPatch(body: any) {
+  const id = String(body.id || "");
+  const channel = String(body.channel || "").trim();
+  const phone = normalizePhone(body.phone || "");
+  const contactId = String(body.contactId || body.contact_id || phone || "").trim();
+  return {
+    id,
+    channel,
+    contactId,
+    phone,
+    name: String(body.name || contactId || phone || ""),
+    lastMessage: String(body.lastMessage || body.last_message || ""),
+    lastAt: String(body.lastAt || body.last_at || new Date().toISOString()),
+    unread: Number(body.unread || 0),
+    tags: normalizeTagIds(body.tags),
+    adId: normalizeAdId(body.adId || body.ad_id || ""),
+    ad: String(body.ad || ""),
+    adset: String(body.adset || ""),
+    campaign: String(body.campaign || ""),
+    campaignId: String(body.campaignId || ""),
+    ctwaClid: String(body.ctwaClid || ""),
+    sourceUrl: String(body.sourceUrl || ""),
+    attributionSource: String(body.attributionSource || ""),
+    followUpAt: String(body.followUpAt || ""),
+    followUpDays: Number(body.followUpDays || 0),
+    followUpContact: normalizePhone(body.followUpContact || ""),
+    followUpNote: String(body.followUpNote || ""),
+    followUpNotifiedAt: String(body.followUpNotifiedAt || ""),
+    crmNote: String(body.crmNote || ""),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeTagIds(value: unknown) {
+  const items = Array.isArray(value) ? value : String(value || "").split(",");
+  return [...new Set(items.map((item) => String(item).trim()).filter(Boolean))];
+}
+
+async function saveCrmTag(body: any) {
+  const tag = normalizeCrmTag(body);
+  const settings = await readSettings();
+  const tags = normalizeCrmTags(settings.crmTags || defaultDb.crmTags);
+  const index = tags.findIndex((item) => item.id === tag.id);
+  const next = index >= 0 ? tags.map((item, itemIndex) => (itemIndex === index ? { ...item, ...tag } : item)) : [...tags, tag];
+  await setSetting("crmTags", next);
+  return tag;
+}
+
+function normalizeCrmTags(value: unknown) {
+  const source = Array.isArray(value) ? value : defaultDb.crmTags;
+  return source.map(normalizeCrmTag).filter((tag) => tag.name);
+}
+
+function normalizeCrmTag(body: any) {
+  const name = String(body.name || "").trim();
+  const fallbackId = name
+    ? `tag_${name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")}`
+    : crypto.randomUUID();
+  return {
+    id: String(body.id || fallbackId),
+    name,
+    color: normalizeColor(body.color || "#2563eb"),
+    action: ["none", "sale", "followup"].includes(String(body.action || "")) ? String(body.action) : "none",
+    followUpDays: Math.max(0, Number(body.followUpDays || 0)),
+    notifyPhone: normalizePhone(body.notifyPhone || ""),
+  };
+}
+
+function normalizeColor(value: unknown) {
+  const color = String(value || "").trim();
+  return /^#[0-9a-f]{6}$/i.test(color) ? color : "#2563eb";
 }
 
 async function replaceCollection(collection: Collection, items: Array<Record<string, unknown>>) {
@@ -545,12 +689,13 @@ async function sendCrmMessage(body: any) {
   const conversationId = String(body.conversationId || "").trim();
   const to = normalizeChannelRecipient(channel, body.to || body.phone || body.contactId || "");
   const textBody = String(body.text || "").trim();
-  if (!channel || !conversationId || !to || !textBody) throw new Error("Faltan datos para enviar el mensaje");
+  const media = normalizeOutgoingMedia(body);
+  if (!channel || !conversationId || !to || (!textBody && !media.url)) throw new Error("Faltan datos para enviar el mensaje");
 
   let providerMessageId = crypto.randomUUID();
-  if (channel === "whatsapp") providerMessageId = await sendWhatsAppText(to, textBody);
-  else if (channel === "messenger") providerMessageId = await sendMessengerText(to, textBody);
-  else if (channel === "instagram") providerMessageId = await sendInstagramText(to, textBody);
+  if (channel === "whatsapp") providerMessageId = await sendWhatsAppMessage(to, textBody, media);
+  else if (channel === "messenger") providerMessageId = await sendMessengerMessage(to, textBody, media);
+  else if (channel === "instagram") providerMessageId = await sendInstagramMessage(to, textBody, media);
   else throw new Error(`Canal no soportado: ${channel}`);
 
   const now = new Date().toISOString();
@@ -561,7 +706,7 @@ async function sendCrmMessage(body: any) {
       contactId: to,
       phone: channel === "whatsapp" ? to : "",
       name: String(body.name || to),
-      lastMessage: textBody,
+      lastMessage: textBody || `[${media.type}]`,
       lastAt: now,
       unread: 0,
     },
@@ -575,6 +720,7 @@ async function sendCrmMessage(body: any) {
       text: textBody,
       at: now,
       status: "sent",
+      attachments: media.url ? [media] : [],
     },
   };
 }
@@ -591,22 +737,57 @@ function channelSenderId(channel: string) {
   return "crm";
 }
 
+function normalizeOutgoingMedia(body: any) {
+  const url = String(body.mediaUrl || body.media?.url || "").trim();
+  const rawType = String(body.mediaType || body.media?.type || "").trim().toLowerCase();
+  const type = ["image", "video", "audio", "document"].includes(rawType) ? rawType : inferMediaType(url);
+  return {
+    type,
+    url,
+    filename: String(body.mediaFilename || body.media?.filename || "").trim(),
+  };
+}
+
+function inferMediaType(url: string) {
+  if (/\.(mp4|mov|webm)(\?|$)/i.test(url)) return "video";
+  if (/\.(mp3|ogg|wav|m4a)(\?|$)/i.test(url)) return "audio";
+  if (/\.(pdf|doc|docx|xls|xlsx|ppt|pptx)(\?|$)/i.test(url)) return "document";
+  return "image";
+}
+
 async function sendWhatsAppText(to: string, textBody: string) {
+  return await sendWhatsAppMessage(to, textBody, { type: "", url: "", filename: "" });
+}
+
+async function sendWhatsAppMessage(to: string, textBody: string, media: { type: string; url: string; filename?: string }) {
   const token = whatsappAccessToken();
   const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
   if (!token || !phoneNumberId) {
     throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_ACCESS_TOKEN/META_ACCESS_TOKEN");
   }
+  const body = media.url
+    ? {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: media.type,
+        [media.type]: {
+          link: media.url,
+          ...(media.filename && media.type === "document" ? { filename: media.filename } : {}),
+          ...(textBody && ["image", "video", "document"].includes(media.type) ? { caption: textBody } : {}),
+        },
+      }
+    : {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "text",
+        text: { preview_url: false, body: textBody },
+      };
   const response = await fetch(`https://graph.facebook.com/${graphVersion()}/${phoneNumberId}/messages`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to,
-      type: "text",
-      text: { preview_url: false, body: textBody },
-    }),
+    body: JSON.stringify(body),
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error?.message || "Meta no acepto el mensaje de WhatsApp");
@@ -614,25 +795,54 @@ async function sendWhatsAppText(to: string, textBody: string) {
 }
 
 async function sendMessengerText(to: string, textBody: string) {
+  return await sendMessengerMessage(to, textBody, { type: "", url: "", filename: "" });
+}
+
+async function sendMessengerMessage(to: string, textBody: string, media: { type: string; url: string }) {
   const token = messengerAccessToken();
   if (!token) throw new Error("Falta MESSENGER_PAGE_ACCESS_TOKEN o META_PAGE_ACCESS_TOKEN para Messenger");
+  let lastMessageId = "";
+  if (textBody) {
+    lastMessageId = await sendMessengerApiMessage(token, to, { text: textBody }, "Meta no acepto el mensaje de Messenger");
+  }
+  if (media.url) {
+    const attachmentType = media.type === "document" ? "file" : media.type;
+    lastMessageId = await sendMessengerApiMessage(
+      token,
+      to,
+      { attachment: { type: attachmentType, payload: { url: media.url, is_reusable: true } } },
+      "Meta no acepto el adjunto de Messenger",
+    );
+  }
+  return lastMessageId || crypto.randomUUID();
+}
+
+async function sendMessengerApiMessage(token: string, to: string, message: Record<string, unknown>, fallbackError: string) {
   const response = await fetch(`https://graph.facebook.com/${graphVersion()}/me/messages`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({
       messaging_type: "RESPONSE",
       recipient: { id: to },
-      message: { text: textBody },
+      message,
     }),
   });
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error?.message || "Meta no acepto el mensaje de Messenger");
+  if (!response.ok) throw new Error(payload.error?.message || fallbackError);
   return payload.message_id || crypto.randomUUID();
 }
 
 async function sendInstagramText(to: string, textBody: string) {
+  return await sendInstagramMessage(to, textBody, { type: "", url: "", filename: "" });
+}
+
+async function sendInstagramMessage(to: string, textBody: string, media: { type: string; url: string }) {
   const token = instagramAccessToken();
   if (!token) throw new Error("Falta INSTAGRAM_ACCESS_TOKEN o META_INSTAGRAM_ACCESS_TOKEN para Instagram");
+  if (media.url) {
+    const fallbackToken = messengerAccessToken() || token;
+    return await sendMessengerStyleInstagramMessage(to, textBody, media, fallbackToken);
+  }
   const accountId = instagramAccountId() || "me";
   const response = await fetch(`https://graph.instagram.com/${graphVersion()}/${accountId}/messages`, {
     method: "POST",
@@ -652,18 +862,78 @@ async function sendInstagramText(to: string, textBody: string) {
 }
 
 async function sendInstagramTextViaMessengerApi(to: string, textBody: string, token: string) {
-  const response = await fetch(`https://graph.facebook.com/${graphVersion()}/me/messages`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({
-      messaging_type: "RESPONSE",
-      recipient: { id: to },
-      message: { text: textBody },
-    }),
-  });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error?.message || "Meta no acepto el mensaje de Instagram");
-  return payload.message_id || crypto.randomUUID();
+  return await sendMessengerStyleInstagramMessage(to, textBody, { type: "", url: "" }, token);
+}
+
+async function sendMessengerStyleInstagramMessage(to: string, textBody: string, media: { type: string; url: string }, token: string) {
+  let lastMessageId = "";
+  if (textBody) {
+    lastMessageId = await sendMessengerApiMessage(token, to, { text: textBody }, "Meta no acepto el mensaje de Instagram");
+  }
+  if (media.url) {
+    const attachmentType = media.type === "document" ? "file" : media.type;
+    lastMessageId = await sendMessengerApiMessage(
+      token,
+      to,
+      { attachment: { type: attachmentType, payload: { url: media.url, is_reusable: true } } },
+      "Meta no acepto el adjunto de Instagram",
+    );
+  }
+  return lastMessageId || crypto.randomUUID();
+}
+
+async function runFollowUpNotifications() {
+  const db = await readDb();
+  const tags = new Map(normalizeCrmTags(db.crmTags).map((tag) => [tag.id, tag]));
+  const today = todayInBusinessTimeZone();
+  const now = new Date().toISOString();
+  const groups = new Map<string, any[]>();
+
+  for (const conversation of db.conversations as any[]) {
+    const followUpAt = String(conversation.followUpAt || "");
+    if (!followUpAt || followUpAt > today || conversation.followUpNotifiedAt) continue;
+    const tagIds = normalizeTagIds(conversation.tags);
+    const followUpTag = tagIds.map((tagId) => tags.get(tagId)).find((tag) => tag?.action === "followup");
+    const notifyPhone = normalizePhone(conversation.followUpContact || followUpTag?.notifyPhone || Deno.env.get("FOLLOWUP_NOTIFY_PHONE") || "");
+    if (!notifyPhone) continue;
+    const bucket = groups.get(notifyPhone) || [];
+    bucket.push({ ...conversation, followUpTagName: followUpTag?.name || "" });
+    groups.set(notifyPhone, bucket);
+  }
+
+  const results = [];
+  const notified = [];
+  for (const [notifyPhone, conversations] of groups) {
+    const lines = conversations.slice(0, 20).map((conversation) => {
+      const name = conversation.name || conversation.phone || conversation.contactId;
+      const source = conversation.ad || conversation.campaign || conversation.adId || "Sin anuncio";
+      const note = conversation.followUpNote ? ` - ${conversation.followUpNote}` : "";
+      return `- ${name} (${conversation.phone || conversation.contactId}) | ${source}${note}`;
+    });
+    const textBody = [
+      "CRM Bormex: contactos que necesitan retroalimentacion.",
+      ...lines,
+      conversations.length > lines.length ? `+ ${conversations.length - lines.length} contactos mas.` : "",
+    ].filter(Boolean).join("\n");
+    try {
+      const messageId = await sendWhatsAppText(notifyPhone, textBody);
+      results.push({ notifyPhone: maskValue(notifyPhone), ok: true, messageId, conversations: conversations.length });
+      notified.push(...conversations);
+    } catch (error) {
+      results.push({ notifyPhone: maskValue(notifyPhone), ok: false, error: error instanceof Error ? error.message : "No se pudo avisar", conversations: conversations.length });
+    }
+  }
+
+  if (notified.length) {
+    await upsertItems("conversations", notified.map((conversation) => ({ ...conversation, followUpNotifiedAt: now })));
+  }
+  return {
+    ok: results.every((result) => result.ok !== false),
+    checkedAt: now,
+    due: [...groups.values()].reduce((sum, conversations) => sum + conversations.length, 0),
+    notified: notified.length,
+    results,
+  };
 }
 
 async function verifyWhatsAppWebhook(url: URL) {
@@ -1104,6 +1374,35 @@ function absoluteWebhookUrl(requestUrl: URL, path: string) {
   return `${base.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+function normalizeReferralAttribution(referral: any, source: string) {
+  if (!referral || typeof referral !== "object") return {};
+  const adId = normalizeAdId(
+    referral.source_id ||
+      referral.ad_id ||
+      referral.ads_context_data?.ad_id ||
+      referral.ads_context_data?.source_id ||
+      referral.ctwa_ad_id ||
+      "",
+  );
+  const ctwaClid = String(referral.ctwa_clid || referral.ctwa_clid_v2 || "");
+  const sourceUrl = String(referral.source_url || referral.url || "");
+  const ref = String(referral.ref || referral.referral_code || "");
+  const campaign = String(referral.headline || referral.source || referral.type || (source.includes("whatsapp") ? "Click-to-WhatsApp" : "Click-to-Meta"));
+  const ad = String(referral.body || referral.ad_title || referral.ads_context_data?.ad_title || sourceUrl || ref || adId || "");
+  const hasAttribution = Boolean(adId || ctwaClid || sourceUrl || ref || referral.headline || referral.body || referral.ad_title);
+  if (!hasAttribution) return {};
+  return {
+    adId,
+    adset: String(referral.adset || referral.adset_name || ""),
+    ad,
+    campaign,
+    campaignId: String(referral.campaign_id || ""),
+    ctwaClid,
+    sourceUrl,
+    attributionSource: source,
+  };
+}
+
 function extractWhatsAppEvents(payload: any) {
   const leads = [];
   const conversations = [];
@@ -1154,6 +1453,8 @@ function extractWhatsAppEvents(payload: any) {
         const textBody = extractMessageText(message);
         const at = timestampToIso(message.timestamp);
         const conversationId = `whatsapp_${phone}`;
+        const referral = message.referral || message.context?.referral || {};
+        const attribution = normalizeReferralAttribution(referral, "whatsapp_referral");
         conversations.push({
           id: conversationId,
           channel: "whatsapp",
@@ -1163,6 +1464,7 @@ function extractWhatsAppEvents(payload: any) {
           lastMessage: textBody,
           lastAt: at,
           unread: isEcho ? 0 : 1,
+          ...attribution,
         });
         messages.push({
           id: message.id || crypto.randomUUID(),
@@ -1176,18 +1478,18 @@ function extractWhatsAppEvents(payload: any) {
           status: isEcho ? "sent" : "received",
           sourceField: field,
           attachments: extractMessageAttachments(message),
+          ...attribution,
         });
-        const referral = message.referral || message.context?.referral || {};
-        if (isEcho || (!referral.source_id && !referral.ctwa_clid)) continue;
+        if (isEcho || !Object.keys(attribution).length) continue;
         leads.push({
           id: `wa_${message.id || crypto.randomUUID()}`,
           source: "whatsapp_cloud",
           phone,
-          campaign: referral.headline || "Click-to-WhatsApp",
-          adset: "",
-          ad: referral.body || referral.source_url || referral.source_id || "Anuncio WhatsApp",
-          adId: referral.source_id || "",
-          ctwaClid: referral.ctwa_clid || "",
+          campaign: attribution.campaign || referral.headline || "Click-to-WhatsApp",
+          adset: attribution.adset || "",
+          ad: attribution.ad || referral.body || referral.source_url || referral.source_id || "Anuncio WhatsApp",
+          adId: attribution.adId || referral.source_id || "",
+          ctwaClid: attribution.ctwaClid || referral.ctwa_clid || "",
           date: timestampToDate(message.timestamp),
           message: textBody,
         });
@@ -1293,13 +1595,15 @@ function extractMetaMessagingEvents(payload: any) {
       const channel = getMetaMessagingChannel(payload, entry, event);
       const sender = String(event.sender?.id || "");
       const recipient = String(event.recipient?.id || "");
-      if (!sender || (!event.message && !event.postback)) continue;
+      if (!sender || (!event.message && !event.postback && !event.referral)) continue;
       const isEcho = isMetaMessageEcho(entry, event, channel);
       const contactId = isEcho ? recipient : sender;
       if (!contactId) continue;
       const conversationId = `${channel}_${contactId}`;
       const textBody = extractMetaMessageText(event);
       const at = event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString();
+      const referral = event.referral || event.message?.referral || event.postback?.referral || {};
+      const attribution = normalizeReferralAttribution(referral, `${channel}_referral`);
       conversations.push({
         id: conversationId,
         channel,
@@ -1309,6 +1613,7 @@ function extractMetaMessagingEvents(payload: any) {
         lastMessage: textBody,
         lastAt: at,
         unread: isEcho ? 0 : 1,
+        ...attribution,
       });
       messages.push({
         id: event.message?.mid || event.postback?.mid || crypto.randomUUID(),
@@ -1322,6 +1627,7 @@ function extractMetaMessagingEvents(payload: any) {
         status: isEcho ? "sent" : "received",
         attachments: extractMetaMessageAttachments(event.message || {}),
         referral: event.referral || event.message?.referral || null,
+        ...attribution,
       });
     }
   }
@@ -1382,6 +1688,7 @@ function normalizeSale(body: any) {
     campaign: String(body.campaign || ""),
     campaignId: String(body.campaignId || ""),
     attributionSource: String(body.attributionSource || ""),
+    sourceConversationId: String(body.sourceConversationId || ""),
   };
 }
 

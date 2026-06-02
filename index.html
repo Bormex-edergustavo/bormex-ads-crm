@@ -172,6 +172,18 @@
                   <p id="inboxConnectionText">Esperando estado del backend.</p>
                 </div>
               </div>
+              <form class="crm-tag-form" id="crmTagForm">
+                <input name="name" placeholder="Nueva etiqueta" required />
+                <select name="action" aria-label="Acción">
+                  <option value="none">Normal</option>
+                  <option value="sale">Pago / venta</option>
+                  <option value="followup">Seguimiento</option>
+                </select>
+                <input name="followUpDays" type="number" min="0" step="1" placeholder="Días" />
+                <input name="notifyPhone" inputmode="tel" placeholder="Avisar a WhatsApp" />
+                <button class="secondary-button compact" type="submit">Crear</button>
+              </form>
+              <button class="secondary-button compact" id="runFollowups" type="button">Enviar avisos vencidos</button>
               <div class="conversation-list" id="conversationList"></div>
             </div>
 
@@ -185,6 +197,15 @@
               <div class="message-thread" id="messageThread"></div>
               <form class="reply-box" id="replyForm">
                 <textarea name="text" rows="2" placeholder="Escribe una respuesta"></textarea>
+                <div class="reply-media-fields">
+                  <select name="mediaType" aria-label="Tipo de adjunto">
+                    <option value="image">Foto</option>
+                    <option value="video">Video</option>
+                    <option value="document">Documento</option>
+                    <option value="audio">Audio</option>
+                  </select>
+                  <input name="mediaUrl" inputmode="url" placeholder="URL de archivo" />
+                </div>
                 <button class="primary-button" type="submit">Enviar</button>
               </form>
             </div>
@@ -200,6 +221,7 @@
               </div>
             </div>
             <form class="form-grid" id="saleForm">
+              <input name="sourceConversationId" type="hidden" />
               <label>
                 Número de WhatsApp
                 <input name="phone" autocomplete="tel" placeholder="+52 999 123 4567" required />

@@ -945,8 +945,18 @@ textarea:focus {
 
 .crm-list-panel {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   gap: 12px;
+}
+
+.crm-tag-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px 72px;
+  gap: 8px;
+}
+
+.crm-tag-form input[name="notifyPhone"] {
+  grid-column: 1 / -2;
 }
 
 .conversation-list {
@@ -1004,6 +1014,38 @@ textarea:focus {
   font-weight: 900;
 }
 
+.conversation-due {
+  color: var(--muted-strong);
+  font-weight: 800;
+}
+
+.conversation-due.is-due {
+  color: #b91c1c;
+}
+
+.tag-mini-row,
+.tag-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-mini,
+.tag-chip {
+  border: 1px solid color-mix(in srgb, var(--tag-color, #64748b) 35%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tag-color, #64748b) 12%, white);
+  color: color-mix(in srgb, var(--tag-color, #64748b) 72%, #0f172a);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.2;
+  padding: 4px 8px;
+}
+
+.tag-chip {
+  cursor: pointer;
+}
+
 .channel-pill {
   display: inline-flex;
   justify-self: start;
@@ -1043,10 +1085,50 @@ textarea:focus {
   padding-bottom: 13px;
 }
 
+.thread-title-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .thread-header p {
   margin-bottom: 0;
   color: var(--muted);
   font-size: 14px;
+}
+
+.thread-action-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(220px, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.tag-control,
+.conversation-ad-form,
+.followup-form {
+  display: grid;
+  gap: 8px;
+}
+
+.inline-control,
+.conversation-ad-form,
+.followup-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.followup-form {
+  grid-column: 1 / -1;
+  grid-template-columns: 150px minmax(180px, 0.6fr) minmax(220px, 1fr) auto;
+}
+
+.empty-inline {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .message-thread {
@@ -1100,11 +1182,29 @@ textarea:focus {
   opacity: 0.78;
 }
 
+.attachment-list {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.attachment-list a {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
 .reply-box {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.36fr) auto;
   align-items: end;
   gap: 10px;
+}
+
+.reply-media-fields {
+  display: grid;
+  gap: 8px;
 }
 
 .reply-box.disabled {
@@ -1235,6 +1335,24 @@ textarea:focus {
 
   .reply-box {
     grid-template-columns: 1fr;
+  }
+
+  .crm-tag-form,
+  .thread-action-grid,
+  .conversation-ad-form,
+  .followup-form,
+  .inline-control {
+    grid-template-columns: 1fr;
+  }
+
+  .crm-tag-form input[name="notifyPhone"],
+  .followup-form {
+    grid-column: auto;
+  }
+
+  .thread-title-row {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .topbar-actions,
