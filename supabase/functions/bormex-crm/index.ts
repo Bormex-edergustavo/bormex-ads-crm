@@ -680,12 +680,17 @@ async function handleMetaOAuthCallback(url: URL) {
 async function getMetaSubscriptionDiagnostics() {
   const pages = await discoverMetaPages();
   const whatsappBusinessAccountId = Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID") || "";
+  const whatsappToken = whatsappAccessToken();
   return {
     whatsapp: {
-      configured: Boolean(whatsappBusinessAccountId && whatsappAccessToken()),
+      configured: Boolean(whatsappBusinessAccountId && whatsappToken),
       businessAccountId: maskValue(whatsappBusinessAccountId),
-      subscribedApps: whatsappBusinessAccountId && whatsappAccessToken()
-        ? await safeGraphGet(`/${whatsappBusinessAccountId}/subscribed_apps?fields=whatsapp_business_api_data`, whatsappAccessToken())
+      phoneNumberId: maskValue(Deno.env.get("WHATSAPP_PHONE_NUMBER_ID") || ""),
+      phoneNumbers: whatsappBusinessAccountId && whatsappToken
+        ? sanitizeWhatsAppPhoneNumbers(await safeGraphGet(`/${whatsappBusinessAccountId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating,code_verification_status,name_status`, whatsappToken))
+        : null,
+      subscribedApps: whatsappBusinessAccountId && whatsappToken
+        ? await safeGraphGet(`/${whatsappBusinessAccountId}/subscribed_apps?fields=whatsapp_business_api_data`, whatsappToken)
         : null,
     },
     pages: await Promise.all(
@@ -718,6 +723,7 @@ async function subscribeMetaWebhooks(requestUrl: URL) {
       result: await safeGraphPostJson(`/${whatsappBusinessAccountId}/subscribed_apps`, whatsappAccessToken(), {
         override_callback_uri: callbackUrl,
         verify_token: metaWebhookVerifyToken(),
+        subscribed_fields: "messages,history,smb_app_state_sync,smb_message_echoes,account_update",
       }),
     });
   } else {
@@ -786,6 +792,18 @@ async function discoverMetaPages() {
 
 function uniqueTokens(tokens: string[]) {
   return [...new Set(tokens.filter(Boolean))];
+}
+
+function sanitizeWhatsAppPhoneNumbers(payload: any) {
+  if (!payload?.data) return payload;
+  return {
+    ...payload,
+    data: payload.data.map((phone: any) => ({
+      ...phone,
+      id: maskValue(String(phone.id || "")),
+      display_phone_number: maskValue(String(phone.display_phone_number || "")),
+    })),
+  };
 }
 
 async function safeGraphGet(path: string, token: string) {
