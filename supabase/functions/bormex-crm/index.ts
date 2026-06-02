@@ -719,7 +719,8 @@ async function getMetaSubscriptionDiagnostics() {
 }
 
 async function getMetaCoexistenceSetup(requestUrl: URL) {
-  const appId = metaAppId();
+  const explicitAppId = metaAppId();
+  const appId = explicitAppId || await inferMetaAppIdFromWaba();
   const configId = metaEmbeddedSignupConfigId();
   const callbackUrl = metaOAuthRedirectUrl(requestUrl);
   const missing = [
@@ -732,6 +733,7 @@ async function getMetaCoexistenceSetup(requestUrl: URL) {
   return {
     connectable: Boolean(onboardingUrl),
     appIdConfigured: Boolean(appId),
+    appIdSource: explicitAppId ? "env" : appId ? "waba_subscribed_app" : "",
     configIdConfigured: Boolean(configId),
     missing,
     feature: "whatsapp_business_app_onboarding",
@@ -740,6 +742,15 @@ async function getMetaCoexistenceSetup(requestUrl: URL) {
     safety: "Usa Coexistence oficial. No migra ni desregistra el numero de WhatsApp Business App.",
     lastMetaOAuthCallback: sanitizeMetaOAuthCallback(settings.lastMetaOAuthCallback),
   };
+}
+
+async function inferMetaAppIdFromWaba() {
+  const whatsappBusinessAccountId = Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID") || "";
+  const token = whatsappAccessToken();
+  if (!whatsappBusinessAccountId || !token) return "";
+  const payload = await safeGraphGet(`/${whatsappBusinessAccountId}/subscribed_apps?fields=whatsapp_business_api_data`, token);
+  const app = payload?.data?.find((item: any) => item?.whatsapp_business_api_data?.id)?.whatsapp_business_api_data;
+  return String(app?.id || "");
 }
 
 function buildWhatsAppBusinessAppOnboardingUrl(appId: string, configId: string, callbackUrl: string) {
