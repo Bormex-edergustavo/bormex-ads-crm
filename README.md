@@ -8,6 +8,7 @@ Dashboard para registrar ventas de WhatsApp y atribuirlas a anuncios por numero 
 - Backend Supabase Edge Function: https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm
 - Webhook WhatsApp: https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm/webhooks/whatsapp
 - Webhook Messenger/Instagram: https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm/webhooks/meta
+- Token extra para proveedores COEX: `POST /api/meta/webhook-token` guarda un verify token adicional en `bormex_settings` para que un Tech Provider como Dualhook pueda verificar el webhook sin exponer secretos en el repo.
 - El panel pide un codigo configurado en los secretos del backend.
 - La sincronizacion de Meta Ads corre cada 15 minutos con `pg_cron` en Supabase.
 - Las ventas, leads, mensajes, anuncios y gasto se guardan en tablas `bormex_*` dentro de Supabase.

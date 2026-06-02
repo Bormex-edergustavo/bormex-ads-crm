@@ -86,6 +86,10 @@ Deno.serve(async (req) => {
       return json(await initiateWhatsAppCoexistenceSync(await readJson(req)));
     }
 
+    if (pathname === "/api/meta/webhook-token" && req.method === "POST") {
+      return json(await saveAdditionalWebhookVerifyToken(await readJson(req)));
+    }
+
     if (pathname === "/api/ads-range" && req.method === "POST") {
       return json(await syncMetaAds(await readJson(req)));
     }
@@ -160,7 +164,7 @@ Deno.serve(async (req) => {
     }
 
     if (pathname === "/webhooks/whatsapp" && req.method === "GET") {
-      return verifyWhatsAppWebhook(url);
+      return await verifyWhatsAppWebhook(url);
     }
 
     if (pathname === "/webhooks/whatsapp" && req.method === "POST") {
@@ -175,7 +179,7 @@ Deno.serve(async (req) => {
     }
 
     if (pathname === "/webhooks/meta" && req.method === "GET") {
-      return verifyWhatsAppWebhook(url);
+      return await verifyWhatsAppWebhook(url);
     }
 
     if (pathname === "/webhooks/meta" && req.method === "POST") {
@@ -662,13 +666,13 @@ async function sendInstagramTextViaMessengerApi(to: string, textBody: string, to
   return payload.message_id || crypto.randomUUID();
 }
 
-function verifyWhatsAppWebhook(url: URL) {
-  const verifyToken = metaWebhookVerifyToken();
-  if (!verifyToken) return text("Webhook sin configurar", 500);
+async function verifyWhatsAppWebhook(url: URL) {
+  const verifyTokens = await metaWebhookVerifyTokens();
+  if (!verifyTokens.length) return text("Webhook sin configurar", 500);
   const mode = url.searchParams.get("hub.mode");
   const token = url.searchParams.get("hub.verify_token");
   const challenge = url.searchParams.get("hub.challenge");
-  if (mode === "subscribe" && token === verifyToken) return text(challenge || "");
+  if (mode === "subscribe" && token && verifyTokens.includes(token)) return text(challenge || "");
   return text("Forbidden", 403);
 }
 
@@ -1506,6 +1510,45 @@ function metaEmbeddedSignupConfigId() {
 
 function metaWebhookVerifyToken() {
   return Deno.env.get("META_WEBHOOK_VERIFY_TOKEN") || Deno.env.get("WHATSAPP_VERIFY_TOKEN") || "";
+}
+
+async function metaWebhookVerifyTokens() {
+  const tokens = new Set<string>();
+  const envToken = metaWebhookVerifyToken().trim();
+  if (envToken) tokens.add(envToken);
+
+  try {
+    const settings = await readSettings();
+    for (const token of normalizeWebhookVerifyTokens(settings.additionalWebhookVerifyTokens)) {
+      tokens.add(token);
+    }
+  } catch {
+    // Keep the public webhook handshake resilient if the settings table is temporarily unavailable.
+  }
+
+  return [...tokens];
+}
+
+async function saveAdditionalWebhookVerifyToken(body: any) {
+  const token = String(body.token || "").trim();
+  if (token.length < 8) throw new HttpError(400, "El verify token debe tener al menos 8 caracteres");
+
+  const settings = await readSettings();
+  const tokens = new Set(normalizeWebhookVerifyTokens(settings.additionalWebhookVerifyTokens));
+  tokens.add(token);
+  await setSetting("additionalWebhookVerifyTokens", [...tokens]);
+
+  return {
+    ok: true,
+    tokenConfigured: true,
+    count: tokens.size,
+  };
+}
+
+function normalizeWebhookVerifyTokens(value: unknown) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  if (typeof value === "string") return [value.trim()].filter(Boolean);
+  return [];
 }
 
 function metaAppSecret() {
