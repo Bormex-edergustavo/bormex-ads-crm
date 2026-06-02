@@ -324,9 +324,10 @@ async function refreshMetaSetup() {
   }
   try {
     await api("/api/meta/subscribe", { method: "POST" });
+    await api("/api/meta/coexistence/sync", { method: "POST", body: JSON.stringify({}) });
     await syncFromServer();
     render();
-    toast("Meta revisado y webhooks suscritos");
+    toast("Meta revisado, webhooks suscritos y COEX sincronizado");
   } catch (error) {
     toast(error.message);
   } finally {

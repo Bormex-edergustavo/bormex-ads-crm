@@ -12,6 +12,7 @@ const defaultDb = {
     minLeads: 8,
   },
   webhookEvents: [],
+  lastCoexistenceSync: null,
   lastAdsSync: null,
   lastAdsRange: null,
   lastWebhookAt: null,
@@ -79,6 +80,10 @@ Deno.serve(async (req) => {
 
     if (pathname === "/api/meta/subscribe" && req.method === "POST") {
       return json(await subscribeMetaWebhooks(url));
+    }
+
+    if (pathname === "/api/meta/coexistence/sync" && req.method === "POST") {
+      return json(await initiateWhatsAppCoexistenceSync(await readJson(req)));
     }
 
     if (pathname === "/api/ads-range" && req.method === "POST") {
@@ -315,6 +320,7 @@ async function readDb() {
     rules: settings.rules || defaultDb.rules,
     campaignPeriods: settings.campaignPeriods || [],
     webhookEvents: settings.webhookEvents || [],
+    lastCoexistenceSync: settings.lastCoexistenceSync || null,
     lastAdsSync: settings.lastAdsSync || null,
     lastAdsRange: settings.lastAdsRange || null,
     lastWebhookAt: settings.lastWebhookAt || null,
@@ -673,6 +679,7 @@ async function handleMetaOAuthCallback(url: URL) {
   const assetParams = Object.fromEntries(
     ["business_id", "waba_id", "phone_number_id", "state"].map((key) => [key, url.searchParams.get(key) || ""]),
   );
+  const setupResults = code ? await completeCoexistenceSetup(url) : null;
 
   await setSetting("lastMetaOAuthCallback", {
     at: new Date().toISOString(),
@@ -681,16 +688,32 @@ async function handleMetaOAuthCallback(url: URL) {
     error,
     errorDescription,
     ...assetParams,
+    setupResults,
   });
 
   const title = error ? "Meta devolvio un error" : code ? "Registro recibido" : "Callback recibido";
   const message = error
     ? errorDescription || error
     : code
-      ? "Meta regreso correctamente al CRM. Ya puedes cerrar esta ventana y volver al panel."
+      ? "Meta regreso correctamente al CRM. Ya puedes cerrar esta ventana y volver al panel. El CRM intento suscribir webhooks e iniciar la sincronizacion COEX."
       : "Meta regreso al CRM, pero no incluyo codigo de autorizacion.";
 
   return text(`${title}\n\n${message}`);
+}
+
+async function completeCoexistenceSetup(url: URL) {
+  const results: Record<string, unknown> = {};
+  try {
+    results.subscriptions = await subscribeMetaWebhooks(url);
+  } catch (error) {
+    results.subscriptions = { ok: false, error: error instanceof Error ? error.message : "No se pudo suscribir Meta" };
+  }
+  try {
+    results.sync = await initiateWhatsAppCoexistenceSync({ reason: "oauth_callback" });
+  } catch (error) {
+    results.sync = { ok: false, error: error instanceof Error ? error.message : "No se pudo iniciar sync COEX" };
+  }
+  return results;
 }
 
 async function getMetaSubscriptionDiagnostics() {
@@ -726,6 +749,7 @@ async function getMetaSubscriptionDiagnostics() {
       instagramAccountId: maskValue(instagramAccountId()),
     },
     lastMetaOAuthCallback: sanitizeMetaOAuthCallback(settings.lastMetaOAuthCallback),
+    lastCoexistenceSync: sanitizeCoexistenceSync(settings.lastCoexistenceSync),
   };
 }
 
@@ -752,6 +776,7 @@ async function getMetaCoexistenceSetup(requestUrl: URL) {
     onboardingUrl,
     safety: "Usa Coexistence oficial. No migra ni desregistra el numero de WhatsApp Business App.",
     lastMetaOAuthCallback: sanitizeMetaOAuthCallback(settings.lastMetaOAuthCallback),
+    lastCoexistenceSync: sanitizeCoexistenceSync(settings.lastCoexistenceSync),
   };
 }
 
@@ -802,6 +827,48 @@ function sanitizeMetaOAuthCallback(value: any) {
     wabaId: maskValue(String(value.waba_id || "")),
     phoneNumberId: maskValue(String(value.phone_number_id || "")),
     state: value.state ? "recibido" : "",
+    setupResults: sanitizeSetupResults(value.setupResults),
+  };
+}
+
+function sanitizeSetupResults(value: any) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    subscriptions: value.subscriptions
+      ? {
+          ok: Boolean(value.subscriptions.ok),
+          results: Array.isArray(value.subscriptions.results)
+            ? value.subscriptions.results.map((item: any) => ({
+                channel: item.channel || "",
+                target: item.target || "",
+                callbackUrl: item.callbackUrl || "",
+                ok: item.result?.ok !== false,
+                error: item.result?.error || "",
+              }))
+            : [],
+        }
+      : null,
+    sync: sanitizeCoexistenceSync(value.sync),
+  };
+}
+
+function sanitizeCoexistenceSync(value: any) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    ok: Boolean(value.ok),
+    at: value.at || "",
+    phoneNumberId: value.phoneNumberId || "",
+    syncTypes: Array.isArray(value.syncTypes) ? value.syncTypes.map((item: unknown) => String(item)) : [],
+    results: Array.isArray(value.results)
+      ? value.results.map((item: any) => ({
+          syncType: item.syncType || "",
+          ok: item.result?.ok !== false,
+          requestId: item.result?.payload?.request_id || item.result?.payload?.requestId || "",
+          error: item.result?.error || "",
+        }))
+      : [],
+    skipped: Boolean(value.skipped),
+    reason: value.reason || "",
   };
 }
 
@@ -851,6 +918,45 @@ async function subscribeMetaWebhooks(requestUrl: URL) {
     results,
     nextCheck: "/api/meta/subscriptions",
   };
+}
+
+async function initiateWhatsAppCoexistenceSync(options: any = {}) {
+  const token = whatsappAccessToken();
+  const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID") || "";
+  if (!token || !phoneNumberId) {
+    throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_ACCESS_TOKEN/META_ACCESS_TOKEN para iniciar sync COEX");
+  }
+
+  const settings = await readSettings();
+  const previous = sanitizeCoexistenceSync(settings.lastCoexistenceSync);
+  if (previous?.ok && !options.force) {
+    return { ...previous, skipped: true, reason: "La sincronizacion COEX ya se inicio correctamente; usa force=true solo si Meta te pidio reintentar." };
+  }
+
+  const requestedTypes = Array.isArray(options.syncTypes) && options.syncTypes.length
+    ? options.syncTypes
+    : ["smb_app_state_sync", "history"];
+  const syncTypes = [...new Set(requestedTypes.map((item: unknown) => String(item)).filter(Boolean))];
+  const results = [];
+  for (const syncType of syncTypes) {
+    results.push({
+      syncType,
+      result: await safeGraphPostJson(`/${phoneNumberId}/smb_app_data`, token, {
+        messaging_product: "whatsapp",
+        sync_type: syncType,
+      }),
+    });
+  }
+
+  const summary = {
+    ok: results.some((item) => item.result?.ok !== false),
+    at: new Date().toISOString(),
+    phoneNumberId: maskValue(phoneNumberId),
+    syncTypes,
+    results,
+  };
+  await setSetting("lastCoexistenceSync", summary);
+  return summary;
 }
 
 async function discoverMetaPages() {
@@ -1004,6 +1110,33 @@ function extractWhatsAppEvents(payload: any) {
       const value = change.value || {};
       const businessPhone = normalizePhone(value.metadata?.display_phone_number || Deno.env.get("WHATSAPP_DISPLAY_PHONE_NUMBER") || "");
       const contacts = new Map((value.contacts || []).map((contact: any) => [contact.wa_id, contact]));
+      for (const contact of getWhatsAppContactSyncItems(value)) {
+        const phone = normalizePhone(
+          contact.wa_id ||
+            contact.phone_number ||
+            contact.contact_phone_number ||
+            contact.CONTACT_PHONE_NUMBER ||
+            contact.phone ||
+            contact.number ||
+            contact.id ||
+            "",
+        );
+        if (!phone) continue;
+        const name = contact.profile?.name || contact.full_name || contact.contact_full_name || contact.CONTACT_FULL_NAME || contact.name || phone;
+        const at = timestampToIso(
+          contact.timestamp || contact.change_timestamp || contact.contact_change_timestamp || contact.CONTACT_CHANGE_TIMESTAMP || contact.updated_at,
+        );
+        conversations.push({
+          id: `whatsapp_${phone}`,
+          channel: "whatsapp",
+          contactId: phone,
+          phone,
+          name,
+          lastMessage: contact.action === "remove" ? "Contacto eliminado en WhatsApp Business App" : "Contacto sincronizado desde WhatsApp Business App",
+          lastAt: at,
+          unread: 0,
+        });
+      }
       for (const message of getWhatsAppMessageItems(value)) {
         const fromPhone = normalizePhone(message.from || message.sender?.wa_id || message.sender?.id || "");
         const toPhone = normalizePhone(message.to || message.recipient_id || message.recipient?.wa_id || message.recipient?.id || "");
@@ -1055,6 +1188,26 @@ function extractWhatsAppEvents(payload: any) {
     }
   }
   return { leads, conversations, messages };
+}
+
+function getWhatsAppContactSyncItems(value: any) {
+  const candidates = [
+    value.contacts,
+    value.contact,
+    value.smb_app_state_sync?.contacts,
+    value.smb_app_state_sync?.data?.contacts,
+    value.smb_app_state_sync?.payload?.contacts,
+  ];
+  return candidates.flatMap((candidate) => {
+    if (Array.isArray(candidate)) return candidate;
+    if (candidate && typeof candidate === "object") return [candidate];
+    return [];
+  }).filter((contact) => {
+    if (!contact || typeof contact !== "object") return false;
+    const hasPhone = Boolean(contact.wa_id || contact.phone_number || contact.contact_phone_number || contact.CONTACT_PHONE_NUMBER || contact.phone || contact.number);
+    const hasSyncShape = Boolean(contact.action || contact.ACTION || contact.full_name || contact.contact_full_name || contact.CONTACT_FULL_NAME || contact.profile?.name);
+    return hasPhone && hasSyncShape;
+  });
 }
 
 function getWhatsAppMessageItems(value: any) {

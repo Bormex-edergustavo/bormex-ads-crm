@@ -37,6 +37,7 @@ const defaultDb = {
     minRoas: 2,
     minLeads: 8,
   },
+  lastCoexistenceSync: null,
   lastAdsSync: null,
   lastAdsRange: null,
   lastWebhookAt: null,
@@ -110,6 +111,10 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/ads-range" && req.method === "POST") {
       return json(res, await syncMetaAds(await readJson(req)));
+    }
+
+    if (url.pathname === "/api/meta/coexistence/sync" && req.method === "POST") {
+      return json(res, await initiateWhatsAppCoexistenceSync(await readJson(req)));
     }
 
     if (url.pathname === "/api/messages" && req.method === "POST") {
@@ -564,6 +569,89 @@ function verifyWhatsAppWebhook(url, res) {
   return text(res, "Forbidden", 403);
 }
 
+async function initiateWhatsAppCoexistenceSync(options = {}) {
+  const token = whatsappAccessToken();
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
+  if (!token || !phoneNumberId) {
+    throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_ACCESS_TOKEN/META_ACCESS_TOKEN para iniciar sync COEX");
+  }
+
+  const db = await readDb();
+  const previous = sanitizeCoexistenceSync(db.lastCoexistenceSync);
+  if (previous?.ok && !options.force) {
+    return { ...previous, skipped: true, reason: "La sincronizacion COEX ya se inicio correctamente; usa force=true solo si Meta te pidio reintentar." };
+  }
+
+  const requestedTypes = Array.isArray(options.syncTypes) && options.syncTypes.length
+    ? options.syncTypes
+    : ["smb_app_state_sync", "history"];
+  const syncTypes = [...new Set(requestedTypes.map((item) => String(item)).filter(Boolean))];
+  const results = [];
+  for (const syncType of syncTypes) {
+    results.push({
+      syncType,
+      result: await safeGraphPostJson(`/${phoneNumberId}/smb_app_data`, token, {
+        messaging_product: "whatsapp",
+        sync_type: syncType,
+      }),
+    });
+  }
+
+  const summary = {
+    ok: results.some((item) => item.result?.ok !== false),
+    at: new Date().toISOString(),
+    phoneNumberId: maskValue(phoneNumberId),
+    syncTypes,
+    results,
+  };
+  db.lastCoexistenceSync = summary;
+  await writeDb(db);
+  return summary;
+}
+
+function sanitizeCoexistenceSync(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    ok: Boolean(value.ok),
+    at: value.at || "",
+    phoneNumberId: value.phoneNumberId || "",
+    syncTypes: Array.isArray(value.syncTypes) ? value.syncTypes.map((item) => String(item)) : [],
+    results: Array.isArray(value.results)
+      ? value.results.map((item) => ({
+          syncType: item.syncType || "",
+          ok: item.result?.ok !== false,
+          requestId: item.result?.payload?.request_id || item.result?.payload?.requestId || "",
+          error: item.result?.error || "",
+        }))
+      : [],
+    skipped: Boolean(value.skipped),
+    reason: value.reason || "",
+  };
+}
+
+async function safeGraphPostJson(path, token, body) {
+  try {
+    const payload = await graphJsonRequest(path, token, body);
+    return { ok: true, payload };
+  } catch (error) {
+    return { ok: false, error: error.message || "Error Graph API" };
+  }
+}
+
+async function graphJsonRequest(path, token, body) {
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  const url = new URL(`https://graph.facebook.com/${graphVersion()}${cleanPath}`);
+  url.searchParams.set("access_token", token);
+  const response = await fetch(url.toString(), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error?.message || `Graph API respondio ${response.status}`);
+  return payload;
+}
+
 async function sendCrmMessage(body) {
   const channel = String(body.channel || "").trim();
   const conversationId = String(body.conversationId || "").trim();
@@ -720,6 +808,33 @@ function extractWhatsAppEvents(payload) {
       const value = change.value || {};
       const businessPhone = normalizePhone(value.metadata?.display_phone_number || process.env.WHATSAPP_DISPLAY_PHONE_NUMBER || "");
       const contacts = new Map((value.contacts || []).map((contact) => [contact.wa_id, contact]));
+      for (const contact of getWhatsAppContactSyncItems(value)) {
+        const phone = normalizePhone(
+          contact.wa_id ||
+            contact.phone_number ||
+            contact.contact_phone_number ||
+            contact.CONTACT_PHONE_NUMBER ||
+            contact.phone ||
+            contact.number ||
+            contact.id ||
+            "",
+        );
+        if (!phone) continue;
+        const name = contact.profile?.name || contact.full_name || contact.contact_full_name || contact.CONTACT_FULL_NAME || contact.name || phone;
+        const at = timestampToIso(
+          contact.timestamp || contact.change_timestamp || contact.contact_change_timestamp || contact.CONTACT_CHANGE_TIMESTAMP || contact.updated_at,
+        );
+        conversations.push({
+          id: `whatsapp_${phone}`,
+          channel: "whatsapp",
+          contactId: phone,
+          phone,
+          name,
+          lastMessage: contact.action === "remove" ? "Contacto eliminado en WhatsApp Business App" : "Contacto sincronizado desde WhatsApp Business App",
+          lastAt: at,
+          unread: 0,
+        });
+      }
       for (const message of getWhatsAppMessageItems(value)) {
         const fromPhone = normalizePhone(message.from || message.sender?.wa_id || message.sender?.id || "");
         const toPhone = normalizePhone(message.to || message.recipient_id || message.recipient?.wa_id || message.recipient?.id || "");
@@ -772,6 +887,26 @@ function extractWhatsAppEvents(payload) {
     }
   }
   return { leads, conversations, messages };
+}
+
+function getWhatsAppContactSyncItems(value) {
+  const candidates = [
+    value.contacts,
+    value.contact,
+    value.smb_app_state_sync?.contacts,
+    value.smb_app_state_sync?.data?.contacts,
+    value.smb_app_state_sync?.payload?.contacts,
+  ];
+  return candidates.flatMap((candidate) => {
+    if (Array.isArray(candidate)) return candidate;
+    if (candidate && typeof candidate === "object") return [candidate];
+    return [];
+  }).filter((contact) => {
+    if (!contact || typeof contact !== "object") return false;
+    const hasPhone = Boolean(contact.wa_id || contact.phone_number || contact.contact_phone_number || contact.CONTACT_PHONE_NUMBER || contact.phone || contact.number);
+    const hasSyncShape = Boolean(contact.action || contact.ACTION || contact.full_name || contact.contact_full_name || contact.CONTACT_FULL_NAME || contact.profile?.name);
+    return hasPhone && hasSyncShape;
+  });
 }
 
 function getWhatsAppMessageItems(value) {

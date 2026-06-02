@@ -36,6 +36,8 @@ Luego abre `http://127.0.0.1:4173`.
 
 Para conservar WhatsApp Business App y WhatsApp Web, no registres el numero con el alta normal de Cloud API. Usa el flujo oficial de Coexistence (`whatsapp_business_app_onboarding`) y suscribe tambien los campos `history`, `smb_app_state_sync` y `smb_message_echoes`. El CRM ya procesa esos eventos para reflejar mensajes enviados desde la app.
 
+Despues de completar Coexistence, ejecuta `POST /api/meta/coexistence/sync` desde el panel Ads o presiona **Revisar Meta**. Esa ruta llama a `/<WHATSAPP_PHONE_NUMBER_ID>/smb_app_data` con `sync_type=smb_app_state_sync` y `sync_type=history`; el backend guarda el ultimo intento para evitar repetir una sincronizacion que Meta documenta como de una sola vez.
+
 ## Variables principales
 
 - `META_ADS_ACCESS_TOKEN`: token permanente con permisos de lectura/administracion de anuncios.
