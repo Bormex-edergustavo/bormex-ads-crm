@@ -40,7 +40,7 @@ Deno.serve(async (req) => {
 
     const url = new URL(req.url);
     const pathname = normalizePath(url.pathname);
-    const accessRole = getAccessRole(req);
+    const accessRole = getAccessRole(req, pathname);
 
     if (!isPublicPath(pathname) && !accessRole) return unauthorized();
     if (!isPublicPath(pathname) && !isPathAllowed(pathname, req.method, accessRole)) {
@@ -112,9 +112,11 @@ Deno.serve(async (req) => {
     }
 
     if (pathname.startsWith("/api/media/whatsapp/") && req.method === "GET") {
+      const mediaRequest = parseWhatsAppMediaRequest(pathname);
       return await downloadWhatsAppMedia(
-        decodeURIComponent(pathname.replace("/api/media/whatsapp/", "")),
+        mediaRequest.mediaId,
         req,
+        mediaRequest.filename,
       );
     }
 
@@ -302,12 +304,21 @@ function isPublicPath(pathname: string) {
   return ["/", "/index.html", "/health", "/webhooks/whatsapp", "/webhooks/meta", "/api/cron/sync", "/api/cron/followups", "/oauth/meta"].includes(pathname);
 }
 
-function getAccessRole(req: Request) {
+function getAccessRole(req: Request, pathname = "") {
   const password = Deno.env.get("PANEL_PASSWORD") || "";
   if (!password) return "ads";
   const header = req.headers.get("authorization") || "";
-  if (!header.startsWith("Basic ")) return "";
-  const decoded = atob(header.slice(6));
+  let encodedCredentials = header.startsWith("Basic ") ? header.slice(6) : "";
+  if (!encodedCredentials && req.method === "GET" && pathname.startsWith("/api/media/whatsapp/")) {
+    encodedCredentials = new URL(req.url).searchParams.get("media_token") || "";
+  }
+  if (!encodedCredentials) return "";
+  let decoded = "";
+  try {
+    decoded = atob(encodedCredentials);
+  } catch {
+    return "";
+  }
   const separator = decoded.indexOf(":");
   const username = decoded.slice(0, separator);
   const incomingPassword = decoded.slice(separator + 1);
@@ -841,14 +852,31 @@ async function sendWhatsAppMessage(to: string, textBody: string, media: { type: 
   if (!token || !phoneNumberId) {
     throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_SEND_ACCESS_TOKEN/WHATSAPP_COEX_ACCESS_TOKEN para enviar desde API Meta");
   }
-  const body = media.url || media.id
+  let body = buildWhatsAppMessageBody(to, textBody, media);
+  let response = await postWhatsAppMessage(phoneNumberId, token, body);
+  let payload = await response.json();
+  if (!response.ok && shouldRetryMediaByLink(payload, media)) {
+    body = buildWhatsAppMessageBody(to, textBody, {
+      ...media,
+      id: "",
+      url: mediaProxyUrl(String(media.id || ""), media.filename, media.mimeType, media.type),
+    });
+    response = await postWhatsAppMessage(phoneNumberId, token, body);
+    payload = await response.json();
+  }
+  if (!response.ok) throw new Error(formatWhatsAppSendError(payload));
+  return payload.messages?.[0]?.id || crypto.randomUUID();
+}
+
+function buildWhatsAppMessageBody(to: string, textBody: string, media: { type: string; url: string; id?: string; filename?: string; mimeType?: string }) {
+  return media.url || media.id
     ? {
         messaging_product: "whatsapp",
         recipient_type: "individual",
         to,
         type: media.type,
         [media.type]: {
-          ...(media.id ? { id: media.id } : { link: media.url }),
+          ...(media.url ? { link: media.url } : { id: media.id }),
           ...(media.filename && media.type === "document" ? { filename: media.filename } : {}),
           ...(textBody && ["image", "video", "document"].includes(media.type) ? { caption: textBody } : {}),
         },
@@ -860,14 +888,89 @@ async function sendWhatsAppMessage(to: string, textBody: string, media: { type: 
         type: "text",
         text: { preview_url: false, body: textBody },
       };
-  const response = await fetch(`https://graph.facebook.com/${graphVersion()}/${phoneNumberId}/messages`, {
+}
+
+function postWhatsAppMessage(phoneNumberId: string, token: string, body: Record<string, unknown>) {
+  return fetch(`https://graph.facebook.com/${graphVersion()}/${phoneNumberId}/messages`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(formatWhatsAppSendError(payload));
-  return payload.messages?.[0]?.id || crypto.randomUUID();
+}
+
+function shouldRetryMediaByLink(payload: any, media: { type: string; id?: string; url?: string }) {
+  const message = String(payload?.error?.message || "").toLowerCase();
+  const code = String(payload?.error?.code || "");
+  return Boolean(media.id && !media.url && code === "100" && message.includes("invalid parameter"));
+}
+
+function mediaProxyUrl(mediaId: string, filename = "", mimeType = "", type = "") {
+  if (!mediaId) return "";
+  const base = publicFunctionBaseUrl();
+  const safeFilename = mediaProxyFilename(filename, mimeType, type);
+  const url = new URL(`${base}/api/media/whatsapp/${encodeURIComponent(mediaId)}/${encodeURIComponent(safeFilename)}`);
+  const token = mediaProxyToken();
+  if (token) url.searchParams.set("media_token", token);
+  return url.toString();
+}
+
+function mediaProxyFilename(filename = "", mimeType = "", type = "") {
+  const basename = String(filename || "")
+    .split(/[\\/]/)
+    .pop()
+    ?.replace(/[?#]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  const fallbackBase = type === "video" ? "video" : type === "audio" ? "audio" : type === "image" ? "foto" : "documento";
+  const base = basename || fallbackBase;
+  if (/\.[a-z0-9]{2,8}$/i.test(base)) return base;
+  const extension = extensionForMedia(mimeType, type);
+  return `${base}.${extension}`;
+}
+
+function extensionForMedia(mimeType = "", type = "") {
+  const mime = String(mimeType || "").toLowerCase();
+  if (mime.includes("pdf")) return "pdf";
+  if (mime.includes("msword")) return "doc";
+  if (mime.includes("wordprocessingml")) return "docx";
+  if (mime.includes("spreadsheetml")) return "xlsx";
+  if (mime.includes("presentationml")) return "pptx";
+  if (mime.includes("csv")) return "csv";
+  if (mime.includes("plain")) return "txt";
+  if (mime.includes("png")) return "png";
+  if (mime.includes("webp")) return "webp";
+  if (mime.includes("gif")) return "gif";
+  if (mime.includes("jpeg") || mime.includes("jpg")) return "jpg";
+  if (mime.includes("mp4")) return "mp4";
+  if (mime.includes("quicktime")) return "mov";
+  if (mime.includes("ogg") || mime.includes("opus")) return "ogg";
+  if (mime.includes("mpeg")) return "mp3";
+  if (mime.includes("wav")) return "wav";
+  if (mime.includes("aac")) return "aac";
+  if (type === "video") return "mp4";
+  if (type === "audio") return "ogg";
+  if (type === "image") return "jpg";
+  return "pdf";
+}
+
+function publicFunctionBaseUrl() {
+  const configuredBase = Deno.env.get("BORMEX_FUNCTION_BASE_URL") || Deno.env.get("CRM_FUNCTION_BASE_URL") || "";
+  if (configuredBase) return configuredBase.replace(/\/$/, "");
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+  try {
+    const projectRef = new URL(supabaseUrl).hostname.split(".")[0];
+    if (projectRef) return `https://${projectRef}.functions.supabase.co/bormex-crm`;
+  } catch {
+    // fall through to the known production project
+  }
+  return "https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm";
+}
+
+function mediaProxyToken() {
+  const password = Deno.env.get("PANEL_PASSWORD") || "";
+  if (!password) return "";
+  return btoa(`${Deno.env.get("PANEL_USERNAME") || "panel"}:${password}`);
 }
 
 async function uploadWhatsAppMedia(formData: FormData) {
@@ -902,7 +1005,16 @@ async function uploadWhatsAppMedia(formData: FormData) {
   };
 }
 
-async function downloadWhatsAppMedia(mediaId: string, req: Request) {
+function parseWhatsAppMediaRequest(pathname: string) {
+  const rest = pathname.replace("/api/media/whatsapp/", "");
+  const [rawMediaId = "", ...rawFilenameParts] = rest.split("/");
+  return {
+    mediaId: decodeURIComponent(rawMediaId),
+    filename: decodeURIComponent(rawFilenameParts.join("/") || ""),
+  };
+}
+
+async function downloadWhatsAppMedia(mediaId: string, req: Request, filename = "") {
   const token = whatsappMediaAccessToken();
   if (!token) {
     throw new Error("Falta WHATSAPP_SEND_ACCESS_TOKEN, WHATSAPP_COEX_ACCESS_TOKEN o WHATSAPP_ACCESS_TOKEN para ver archivos de WhatsApp");
@@ -932,6 +1044,8 @@ async function downloadWhatsAppMedia(mediaId: string, req: Request) {
     "cache-control": "private, max-age=300",
     "content-type": response.headers.get("content-type") || String(metadata.mime_type || "application/octet-stream"),
   });
+  const downloadName = mediaProxyFilename(filename, String(metadata.mime_type || ""), "");
+  responseHeaders.set("content-disposition", `inline; filename="${downloadName.replace(/"/g, "")}"`);
   for (const header of ["content-length", "content-range", "accept-ranges"]) {
     const value = response.headers.get(header);
     if (value) responseHeaders.set(header, value);
@@ -942,10 +1056,11 @@ async function downloadWhatsAppMedia(mediaId: string, req: Request) {
 function formatWhatsAppSendError(payload: any) {
   const message = String(payload?.error?.message || "");
   const code = payload?.error?.code ? `#${payload.error.code}` : "";
+  const details = String(payload?.error?.error_data?.details || payload?.error?.error_user_msg || "");
   if (code === "#200" || message.toLowerCase().includes("necessary permissions")) {
     return "(#200) El token configurado no tiene permiso para enviar mensajes en nombre de este WABA. Recibir por COEX/Dualhook funciona, pero para enviar desde el CRM falta configurar WHATSAPP_SEND_ACCESS_TOKEN o WHATSAPP_COEX_ACCESS_TOKEN con permisos whatsapp_business_messaging.";
   }
-  return message || "Meta no acepto el mensaje de WhatsApp";
+  return [code ? `(${code})` : "", message, details].filter(Boolean).join(" ") || "Meta no acepto el mensaje de WhatsApp";
 }
 
 async function sendMessengerText(to: string, textBody: string) {

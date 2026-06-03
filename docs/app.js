@@ -36,6 +36,8 @@ let serverAvailable = false;
 let activeConversationId = "";
 let remoteConfig = {};
 let remoteRequestVersion = 0;
+let syncInFlight = null;
+let syncQueued = false;
 const mediaObjectUrlCache = new Map();
 
 const money = new Intl.NumberFormat("es-MX", {
@@ -221,8 +223,12 @@ function hideAuthGate() {
 }
 
 async function syncFromServer() {
+  if (syncInFlight) {
+    syncQueued = true;
+    return syncInFlight;
+  }
   const requestVersion = ++remoteRequestVersion;
-  try {
+  syncInFlight = (async () => {
     const [config, remoteState, coexistenceSetup] = await Promise.all([
       api("/api/config"),
       api("/api/state"),
@@ -232,22 +238,23 @@ async function syncFromServer() {
     serverAvailable = true;
     remoteConfig = config || {};
     accessRole = config.role || roleFromCode(panelCode) || accessRole;
-    state.conversations = remoteState.conversations || state.conversations;
-    state.messages = remoteState.messages || state.messages;
-    state.sales = remoteState.sales || state.sales;
-    state.leads = remoteState.leads || state.leads;
-    state.spend = remoteState.spend || state.spend;
-    state.ads = remoteState.ads || state.ads;
-    state.crmTags = remoteState.crmTags || state.crmTags;
-    state.campaignPeriods = remoteState.campaignPeriods || state.campaignPeriods;
-    state.rules = remoteState.rules || state.rules;
+    mergeRemoteState(remoteState);
     renderConnectionStatus(config, remoteState, coexistenceSetup);
     saveState();
+  })();
+  try {
+    await syncInFlight;
   } catch {
     if (requestVersion !== remoteRequestVersion) return;
     serverAvailable = false;
     remoteConfig = {};
     renderConnectionStatus(null, null);
+  } finally {
+    syncInFlight = null;
+    if (syncQueued) {
+      syncQueued = false;
+      await syncFromServer();
+    }
   }
 }
 
@@ -1413,6 +1420,32 @@ function getMediaFileType(file, fallbackType = "") {
   );
 }
 
+function mediaUrlFilename(label = "", type = "") {
+  const base =
+    String(label || "")
+      .split(/[\\/]/)
+      .pop()
+      ?.replace(/[?#]/g, "-")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120) || "archivo";
+  if (/\.[a-z0-9]{2,8}$/i.test(base)) return base;
+  const extension = {
+    image: "jpg",
+    video: "mp4",
+    audio: "ogg",
+    document: "pdf",
+  }[type] || "bin";
+  return `${base}.${extension}`;
+}
+
+function authenticatedMediaUrl(mediaId, label = "archivo", type = "document") {
+  const token = panelCode ? btoa(`panel:${panelCode}`) : "";
+  const query = token ? `?media_token=${encodeURIComponent(token)}` : "";
+  const filename = mediaUrlFilename(label, type);
+  return `${API_BASE}/api/media/whatsapp/${encodeURIComponent(mediaId)}/${encodeURIComponent(filename)}${query}`;
+}
+
 function renderMediaPreview(url, type, label) {
   const safeUrl = escapeHtml(url);
   const safeLabel = escapeHtml(label);
@@ -1424,7 +1457,12 @@ function renderMediaPreview(url, type, label) {
     `;
   }
   if (type === "video") {
-    return `<video class="message-media" src="${safeUrl}" controls playsinline preload="metadata"></video>`;
+    return `
+      <div class="message-video-card">
+        <video class="message-media" src="${safeUrl}" controls playsinline preload="metadata"></video>
+        <a class="message-media-open" href="${safeUrl}" target="_blank" rel="noreferrer noopener" download="${safeLabel}">Abrir o descargar video</a>
+      </div>
+    `;
   }
   if (type === "audio") {
     return `
@@ -1435,7 +1473,7 @@ function renderMediaPreview(url, type, label) {
       </div>
     `;
   }
-  return `<a class="message-file-link" href="${safeUrl}" target="_blank" rel="noreferrer noopener">${safeLabel}</a>`;
+  return `<a class="message-file-link" href="${safeUrl}" target="_blank" rel="noreferrer noopener" download="${safeLabel}">${safeLabel}</a>`;
 }
 
 async function hydrateMediaAttachments(root) {
@@ -1447,15 +1485,12 @@ async function hydrateMediaAttachments(root) {
       const fallbackType = frame.dataset.mediaType || "document";
       if (!mediaId) return;
       try {
-        let cached = mediaObjectUrlCache.get(mediaId);
-        if (!cached) {
-          const blob = await apiBlob(`/api/media/whatsapp/${encodeURIComponent(mediaId)}`);
-          cached = {
-            url: URL.createObjectURL(blob),
-            type: getAttachmentType({ type: fallbackType, mimeType: blob.type, filename: label }),
-          };
-          mediaObjectUrlCache.set(mediaId, cached);
-        }
+        const cacheKey = `${mediaId}:${label}:${fallbackType}`;
+        const cached = mediaObjectUrlCache.get(cacheKey) || {
+          url: authenticatedMediaUrl(mediaId, label, fallbackType),
+          type: fallbackType,
+        };
+        mediaObjectUrlCache.set(cacheKey, cached);
         frame.classList.remove("is-loading", "is-error");
         frame.classList.add("is-ready");
         frame.innerHTML = renderMediaPreview(cached.url, cached.type, label);
@@ -1725,16 +1760,60 @@ function isWhatsAppPermissionError(error) {
 
 function applyRemoteState(remoteState) {
   remoteRequestVersion += 1;
-  state.conversations = remoteState.conversations || state.conversations;
-  state.messages = remoteState.messages || state.messages;
-  state.sales = remoteState.sales || state.sales;
-  state.leads = remoteState.leads || state.leads;
-  state.spend = remoteState.spend || state.spend;
-  state.ads = remoteState.ads || state.ads;
-  state.crmTags = remoteState.crmTags || state.crmTags;
-  state.campaignPeriods = remoteState.campaignPeriods || state.campaignPeriods;
-  state.rules = remoteState.rules || state.rules;
+  mergeRemoteState(remoteState);
   saveState();
+}
+
+function mergeRemoteState(remoteState = {}) {
+  state.conversations = mergeRemoteRows(state.conversations, remoteState.conversations, ["updatedAt", "lastAt"]);
+  state.messages = mergeRemoteRows(state.messages, remoteState.messages, ["at"]);
+  state.sales = Array.isArray(remoteState.sales) ? remoteState.sales : state.sales;
+  state.leads = Array.isArray(remoteState.leads) ? remoteState.leads : state.leads;
+  state.spend = Array.isArray(remoteState.spend) ? remoteState.spend : state.spend;
+  state.ads = Array.isArray(remoteState.ads) ? remoteState.ads : state.ads;
+  state.crmTags = Array.isArray(remoteState.crmTags) ? remoteState.crmTags : state.crmTags;
+  state.campaignPeriods = Array.isArray(remoteState.campaignPeriods) ? remoteState.campaignPeriods : state.campaignPeriods;
+  state.rules = remoteState.rules || state.rules;
+}
+
+function mergeRemoteRows(localRows = [], remoteRows, dateFields = []) {
+  if (!Array.isArray(remoteRows)) return localRows || [];
+  if (!remoteRows.length && (localRows || []).length) return localRows;
+  const rows = new Map();
+  for (const row of localRows || []) {
+    const id = String(row?.id || "");
+    if (id) rows.set(id, row);
+  }
+  for (const row of remoteRows) {
+    const id = String(row?.id || "");
+    if (!id) continue;
+    const existing = rows.get(id);
+    rows.set(id, mergeRemoteRow(existing, row, dateFields));
+  }
+  return [...rows.values()];
+}
+
+function mergeRemoteRow(existing, incoming, dateFields = []) {
+  if (!existing) return incoming;
+  const existingTime = newestRecordTime(existing, dateFields);
+  const incomingTime = newestRecordTime(incoming, dateFields);
+  if (incomingTime < existingTime) {
+    return { ...incoming, ...existing };
+  }
+  const merged = { ...existing, ...incoming };
+  for (const field of ["customName", "avatarUrl", "profilePic", "picture", "tags"]) {
+    if ((incoming[field] === "" || incoming[field] === undefined || incoming[field] === null) && existing[field] !== undefined) {
+      merged[field] = existing[field];
+    }
+  }
+  return merged;
+}
+
+function newestRecordTime(row, dateFields = []) {
+  const values = [...dateFields, "updatedAt", "lastAt", "at"]
+    .map((field) => Date.parse(String(row?.[field] || "")))
+    .filter(Number.isFinite);
+  return values.length ? Math.max(...values) : 0;
 }
 
 function persistAndRender(message) {
@@ -2100,6 +2179,8 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
   event.preventDefault();
   const conversation = (state.conversations || []).find((item) => item.id === activeConversationId);
   const form = event.currentTarget;
+  const sendApiButton = document.getElementById("sendApiButton");
+  const originalButtonText = sendApiButton?.textContent || "Enviar API Meta";
   const text = form.elements.text.value.trim();
   const mediaFile = form.elements.mediaFile.files?.[0] || null;
   const selectedMediaType = form.elements.mediaType.value;
@@ -2110,16 +2191,23 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
     return;
   }
   try {
+    form.classList.add("is-sending");
+    if (sendApiButton) {
+      sendApiButton.disabled = true;
+      sendApiButton.textContent = mediaFile ? "Subiendo archivo..." : "Enviando...";
+    }
     let uploadedMedia = null;
     if (mediaFile) {
       if (conversation.channel !== "whatsapp") {
         toast("Los archivos desde dispositivo por ahora solo estan listos para WhatsApp");
         return;
       }
+      toast(`Subiendo ${mediaType === "document" ? "documento" : mediaType === "video" ? "video" : "archivo"}...`);
       const uploadForm = new FormData();
       uploadForm.append("file", mediaFile);
       uploadForm.append("mediaType", mediaType);
       uploadedMedia = await apiForm("/api/media/whatsapp", uploadForm);
+      if (sendApiButton) sendApiButton.textContent = "Enviando...";
     }
     const remoteState = await api("/api/messages", {
       method: "POST",
@@ -2145,6 +2233,7 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
     scheduleFreshSync(4500);
     toast(mediaFile ? "Mensaje con archivo enviado" : "Mensaje enviado");
   } catch (error) {
+    console.error(error);
     if (isWhatsAppPermissionError(error)) {
       remoteConfig.whatsappSendApiConfigured = false;
       updateReplyActions(conversation);
@@ -2152,6 +2241,13 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
       return;
     }
     toast(error.message);
+  } finally {
+    form.classList.remove("is-sending");
+    if (sendApiButton) {
+      sendApiButton.disabled = false;
+      sendApiButton.textContent = originalButtonText;
+      updateReplyActions(conversation);
+    }
   }
 });
 

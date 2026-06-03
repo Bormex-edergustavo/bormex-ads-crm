@@ -1458,6 +1458,19 @@ textarea:focus {
   object-fit: contain;
 }
 
+.message-video-card {
+  display: grid;
+  gap: 7px;
+  width: min(520px, 100%);
+}
+
+.message-media-open {
+  width: fit-content;
+  opacity: 0.86;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .message-audio {
   display: block;
   width: min(380px, 100%);
@@ -1525,6 +1538,10 @@ textarea:focus {
 .reply-box.disabled {
   opacity: 0.55;
   pointer-events: none;
+}
+
+.reply-box.is-sending {
+  opacity: 0.78;
 }
 
 .hint {
