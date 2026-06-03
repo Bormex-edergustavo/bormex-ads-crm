@@ -811,7 +811,10 @@ function normalizeOutgoingMedia(body: any) {
   const filename = String(body.mediaFilename || body.media?.filename || "").trim();
   const mimeType = String(body.mediaMimeType || body.media?.mimeType || "").trim();
   const rawType = String(body.mediaType || body.media?.type || "").trim().toLowerCase();
-  const type = inferMediaType(mimeType) || inferMediaType(filename) || inferMediaType(url) || normalizeMediaType(rawType) || "document";
+  const hasMedia = Boolean(url || id || filename || mimeType);
+  const type = hasMedia
+    ? inferMediaType(mimeType) || inferMediaType(filename) || inferMediaType(url) || normalizeMediaType(rawType) || "document"
+    : "";
   return {
     type,
     url,
@@ -864,7 +867,7 @@ async function sendWhatsAppMessage(to: string, textBody: string, media: { type: 
     response = await postWhatsAppMessage(phoneNumberId, token, body);
     payload = await response.json();
   }
-  if (!response.ok) throw new Error(formatWhatsAppSendError(payload));
+  if (!response.ok) throw new Error(formatWhatsAppSendError(payload, { to, media }));
   return payload.messages?.[0]?.id || crypto.randomUUID();
 }
 
@@ -1053,12 +1056,18 @@ async function downloadWhatsAppMedia(mediaId: string, req: Request, filename = "
   return cors(new Response(response.body, { status: response.status === 206 ? 206 : 200, headers: responseHeaders }));
 }
 
-function formatWhatsAppSendError(payload: any) {
+function formatWhatsAppSendError(payload: any, context: { to?: string; media?: { type?: string; filename?: string; mimeType?: string } } = {}) {
   const message = String(payload?.error?.message || "");
   const code = payload?.error?.code ? `#${payload.error.code}` : "";
   const details = String(payload?.error?.error_data?.details || payload?.error?.error_user_msg || "");
   if (code === "#200" || message.toLowerCase().includes("necessary permissions")) {
     return "(#200) El token configurado no tiene permiso para enviar mensajes en nombre de este WABA. Recibir por COEX/Dualhook funciona, pero para enviar desde el CRM falta configurar WHATSAPP_SEND_ACCESS_TOKEN o WHATSAPP_COEX_ACCESS_TOKEN con permisos whatsapp_business_messaging.";
+  }
+  if (code === "#100" || message.toLowerCase().includes("invalid parameter")) {
+    const mediaType = context.media?.type ? ` ${context.media.type}` : "";
+    const filename = context.media?.filename ? ` (${context.media.filename})` : "";
+    const suffix = context.to ? ` Destino: ${context.to}.` : "";
+    return `(#100) Meta rechazo los parametros del mensaje${mediaType}${filename}.${suffix} Si estas probando, usa el numero personal real del cliente, no el mismo numero emisor del WhatsApp Business.`;
   }
   return [code ? `(${code})` : "", message, details].filter(Boolean).join(" ") || "Meta no acepto el mensaje de WhatsApp";
 }
