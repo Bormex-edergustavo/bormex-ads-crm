@@ -7,6 +7,12 @@ const API_BASE = getApiBase();
 let panelCode = localStorage.getItem(AUTH_STORAGE_KEY) || "";
 let accessRole = roleFromCode(panelCode);
 const MEDIA_TYPES = new Set(["image", "video", "audio", "document"]);
+const MEDIA_UPLOAD_LIMITS = {
+  image: 5 * 1024 * 1024,
+  video: 16 * 1024 * 1024,
+  audio: 16 * 1024 * 1024,
+  document: 100 * 1024 * 1024,
+};
 
 const defaultState = {
   conversations: [],
@@ -1420,6 +1426,22 @@ function getMediaFileType(file, fallbackType = "") {
   );
 }
 
+function validateMediaUpload(file, type) {
+  if (!file) return "";
+  const limit = MEDIA_UPLOAD_LIMITS[type] || MEDIA_UPLOAD_LIMITS.document;
+  if (file.size <= limit) return "";
+  return `El archivo pesa ${formatBytes(file.size)}. Para WhatsApp el limite de ${getMediaTypeLabel(type)} es ${formatBytes(limit)}.`;
+}
+
+function getMediaTypeLabel(type) {
+  return { image: "foto", video: "video", audio: "audio", document: "documento" }[type] || "archivo";
+}
+
+function formatBytes(bytes) {
+  const mb = bytes / 1024 / 1024;
+  return `${mb >= 10 ? Math.round(mb) : mb.toFixed(1)} MB`;
+}
+
 function mediaUrlFilename(label = "", type = "") {
   const base =
     String(label || "")
@@ -2186,6 +2208,11 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
   const selectedMediaType = form.elements.mediaType.value;
   const mediaType = mediaFile ? getMediaFileType(mediaFile, selectedMediaType) : normalizeMediaType(selectedMediaType);
   if (!conversation || (!text && !mediaFile)) return;
+  const mediaError = validateMediaUpload(mediaFile, mediaType);
+  if (mediaError) {
+    toast(mediaError);
+    return;
+  }
   if (conversation.channel === "whatsapp" && !remoteConfig.whatsappSendApiConfigured) {
     openWhatsAppDraft();
     return;

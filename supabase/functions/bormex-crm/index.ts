@@ -395,10 +395,16 @@ async function readDb() {
 }
 
 async function readCollection(collection: Collection) {
-  const response = await supabaseFetch(`/rest/v1/${tableMap[collection]}?select=data`);
-  const rows = await response.json();
-  if (!response.ok) throw new Error(rows.message || `No se pudo leer ${collection}`);
-  return rows.map((row: { data: unknown }) => row.data);
+  const pageSize = 1000;
+  const items = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const response = await supabaseFetch(`/rest/v1/${tableMap[collection]}?select=data&limit=${pageSize}&offset=${offset}`);
+    const rows = await response.json();
+    if (!response.ok) throw new Error(rows.message || `No se pudo leer ${collection}`);
+    items.push(...rows.map((row: { data: unknown }) => row.data));
+    if (rows.length < pageSize) break;
+  }
+  return items;
 }
 
 async function readSettings() {
@@ -986,6 +992,13 @@ async function uploadWhatsAppMedia(formData: FormData) {
   if (!(file instanceof File)) throw new HttpError(400, "Selecciona un archivo valido");
   const requestedType = String(formData.get("mediaType") || "").toLowerCase();
   const mediaType = inferMediaType(file.type) || inferMediaType(file.name) || normalizeMediaType(requestedType) || "document";
+  const sizeLimit = mediaUploadLimit(mediaType);
+  if (file.size > sizeLimit) {
+    throw new HttpError(
+      400,
+      `El archivo pesa ${formatMegabytes(file.size)}. Para WhatsApp el limite de ${mediaTypeLabel(mediaType)} es ${formatMegabytes(sizeLimit)}.`,
+    );
+  }
 
   const graphForm = new FormData();
   graphForm.append("messaging_product", "whatsapp");
@@ -1006,6 +1019,25 @@ async function uploadWhatsAppMedia(formData: FormData) {
     mimeType: file.type || "",
     size: file.size || 0,
   };
+}
+
+function mediaUploadLimit(type: string) {
+  if (type === "image") return 5 * 1024 * 1024;
+  if (type === "video" || type === "audio") return 16 * 1024 * 1024;
+  return 100 * 1024 * 1024;
+}
+
+function mediaTypeLabel(type: string) {
+  if (type === "image") return "foto";
+  if (type === "video") return "video";
+  if (type === "audio") return "audio";
+  if (type === "document") return "documento";
+  return "archivo";
+}
+
+function formatMegabytes(bytes: number) {
+  const mb = bytes / 1024 / 1024;
+  return `${mb >= 10 ? Math.round(mb) : mb.toFixed(1)} MB`;
 }
 
 function parseWhatsAppMediaRequest(pathname: string) {
