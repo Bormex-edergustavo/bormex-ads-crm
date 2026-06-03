@@ -104,7 +104,7 @@ Deno.serve(async (req) => {
       const message = await sendCrmMessage(body);
       await upsertItems("conversations", [message.conversation]);
       await upsertItems("messages", [message.record]);
-      return json(filterStateForRole(await readDb(), accessRole));
+      return json(messageDeltaState(message, accessRole));
     }
 
     if (pathname === "/api/media/whatsapp" && req.method === "POST") {
@@ -356,6 +356,15 @@ function filterStateForRole(db: typeof defaultDb, role: string) {
     sales: db.sales || [],
     crmTags: db.crmTags || defaultDb.crmTags,
     rules: db.rules || defaultDb.rules,
+  };
+}
+
+function messageDeltaState(message: { conversation: Record<string, unknown>; record: Record<string, unknown> }, role: string) {
+  return {
+    partial: true,
+    role,
+    conversations: [message.conversation],
+    messages: [message.record],
   };
 }
 
