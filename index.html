@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
     <title>Bormex Ads CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20260604-roas-sales-fix" />
+    <link rel="stylesheet" href="styles.css?v=20260604-leads-status" />
   </head>
   <body>
     <div class="app-shell" id="appShell">
@@ -304,7 +304,7 @@
             <div class="connection-panel">
               <span class="connection-dot pending" id="whatsappConnectionDot"></span>
               <div>
-                <strong>Conexión pendiente</strong>
+                <strong id="whatsappConnectionTitle">Revisando conexión</strong>
                 <p id="whatsappConnectionText">Los conteos por anuncio vienen de Meta Ads; aquí aparecerán los contactos con número cuando WhatsApp entregue el webhook real.</p>
                 <div class="connection-actions">
                   <a class="primary-button" id="whatsappCoexistenceLink" href="#" target="_blank" rel="noreferrer noopener" aria-disabled="true">Conectar Coexistence</a>
@@ -447,7 +447,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=20260604-roas-sales-fix"></script>
+    <script src="app.js?v=20260604-leads-status"></script>
     <script>
       window.lucide?.createIcons();
     </script>

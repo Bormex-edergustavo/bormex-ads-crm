@@ -2099,7 +2099,7 @@ textarea:focus {
             <div class="connection-panel">
               <span class="connection-dot pending" id="whatsappConnectionDot"></span>
               <div>
-                <strong>Conexión pendiente</strong>
+                <strong id="whatsappConnectionTitle">Revisando conexión</strong>
                 <p id="whatsappConnectionText">Los conteos por anuncio vienen de Meta Ads; aquí aparecerán los contactos con número cuando WhatsApp entregue el webhook real.</p>
                 <div class="connection-actions">
                   <a class="primary-button" id="whatsappCoexistenceLink" href="#" target="_blank" rel="noreferrer noopener" aria-disabled="true">Conectar Coexistence</a>
@@ -2525,6 +2525,7 @@ function renderConnectionStatus(config, remoteState, coexistenceSetup = null) {
   const whatsappDot = document.getElementById("whatsappConnectionDot");
   const adsDot = document.getElementById("adsConnectionDot");
   const inboxText = document.getElementById("inboxConnectionText");
+  const whatsappTitle = document.getElementById("whatsappConnectionTitle");
   const whatsappText = document.getElementById("whatsappConnectionText");
   const coexistenceLink = document.getElementById("whatsappCoexistenceLink");
   const coexistenceText = document.getElementById("whatsappCoexistenceText");
@@ -2539,9 +2540,10 @@ function renderConnectionStatus(config, remoteState, coexistenceSetup = null) {
   dots.forEach((dot) => dot.classList.remove("connected"));
   if (!serverAvailable) {
     if (inboxText) inboxText.textContent = "No pude conectar con el backend del inbox.";
-    if (whatsappText) whatsappText.textContent = "No pude conectar con el backend. Revisa internet o intenta recargar el panel.";
+    if (whatsappTitle) whatsappTitle.textContent = "Reintentando conexión";
+    if (whatsappText) whatsappText.textContent = "El backend no respondió en esta carga. El panel reintenta solo; si acabas de entrar, espera unos segundos o recarga.";
     if (coexistenceLink) setCoexistenceLink(coexistenceLink, "");
-    if (coexistenceText) coexistenceText.textContent = "No pude revisar el flujo de Coexistence.";
+    if (coexistenceText) coexistenceText.textContent = "Coexistence se revisará cuando vuelva la conexión del panel.";
     if (adsText) adsText.textContent = "No pude conectar con el backend para sincronizar anuncios activos desde Meta Ads API.";
     if (syncButton) syncButton.disabled = true;
     return;
@@ -2567,6 +2569,7 @@ function renderConnectionStatus(config, remoteState, coexistenceSetup = null) {
   if (syncButton) syncButton.disabled = !config.metaAdsConfigured;
   if (config.whatsappWebhookConfigured) {
     setConnected(whatsappDot, true);
+    if (whatsappTitle) whatsappTitle.textContent = "WhatsApp conectado";
     const phoneStatus = config.whatsappPhoneConfigured ? "Número real configurado." : "Falta WHATSAPP_PHONE_NUMBER_ID para responder desde el CRM.";
     const coexistenceStatus = config.whatsappCoexistenceReady
       ? "Preparado para coexistencia; no requiere desregistrar la app."
@@ -2575,6 +2578,7 @@ function renderConnectionStatus(config, remoteState, coexistenceSetup = null) {
     if (whatsappText) whatsappText.textContent = `Webhook guardado. ${phoneStatus} ${coexistenceStatus} ${sendStatus} Último evento recibido: ${remoteState.lastWebhookAt || "todavía ninguno"}.`;
   } else {
     setConnected(whatsappDot, false);
+    if (whatsappTitle) whatsappTitle.textContent = "Configuración pendiente";
     if (whatsappText) whatsappText.textContent = "Falta META_WEBHOOK_VERIFY_TOKEN o WHATSAPP_VERIFY_TOKEN para verificar el webhook de Meta.";
   }
   renderCoexistenceSetup(coexistenceSetup, coexistenceLink, coexistenceText);
@@ -2595,7 +2599,11 @@ function renderCoexistenceSetup(setup, link, text) {
   if (!link && !text) return;
   if (!setup) {
     if (link) setCoexistenceLink(link, "");
-    if (text) text.textContent = "No pude revisar la configuración de Coexistence en este momento.";
+    if (text) {
+      text.textContent = isSalesRole()
+        ? "Coexistence solo se revisa con el código Ads; tu acceso de ventas sigue pudiendo atender CRM y registrar ventas."
+        : "No pude revisar la configuración de Coexistence en este momento.";
+    }
     return;
   }
   if (setup.connectable && setup.onboardingUrl) {
