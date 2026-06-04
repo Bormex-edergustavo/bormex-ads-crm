@@ -1592,9 +1592,11 @@ async function handleSaleSubmit(event) {
   } else {
     applyKnownSaleAttribution(sale);
   }
-  await saveSale(sale, "Venta registrada");
-  form.reset();
-  form.elements.date.value = today();
+  const saved = await saveSale(sale, "Venta registrada");
+  if (saved) {
+    form.reset();
+    form.elements.date.value = today();
+  }
 }
 
 function applyManualAdAttribution(sale, adIdInput, options = {}) {
@@ -1633,9 +1635,19 @@ async function saveSale(sale, message) {
     }
     render();
     toast(message);
+    return true;
   } catch (error) {
-    toast(error.message);
+    toast(`No se guardó la venta: ${formatActionError(error)}`);
+    return false;
   }
+}
+
+function formatActionError(error) {
+  const message = String(error?.message || "intenta de nuevo");
+  if (/quota|cuota|limit|rate/i.test(message)) {
+    return "Meta Ads agotó su cuota, pero la venta no depende de Meta. Recarga el panel para usar la versión corregida e intenta guardar otra vez.";
+  }
+  return message;
 }
 
 async function editSaleAdId(saleId) {
