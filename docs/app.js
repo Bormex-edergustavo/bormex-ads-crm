@@ -48,6 +48,7 @@ let remoteConfig = {};
 let remoteRequestVersion = 0;
 let syncInFlight = null;
 let syncQueued = false;
+let saleSaveInFlight = false;
 const mediaObjectUrlCache = new Map();
 
 const money = new Intl.NumberFormat("es-MX", {
@@ -91,6 +92,10 @@ function isSalesRole() {
 
 function isSalesRoleViewAllowed(view) {
   return !isSalesRole() || ["crm", "sales"].includes(view);
+}
+
+function isSalesViewActive() {
+  return document.getElementById("salesView")?.classList.contains("active");
 }
 
 function addDays(dateValue, days) {
@@ -424,7 +429,7 @@ async function syncAdsFromMeta() {
     state.rangeMetaStatus = "";
     saveState();
     render();
-    toast(state.rangeLoadError);
+    if (!isSalesViewActive() && !saleSaveInFlight) toast(state.rangeLoadError);
     return false;
   } finally {
     if (button) {
@@ -1579,6 +1584,7 @@ async function hydrateMediaAttachments(root) {
 async function handleSaleSubmit(event) {
   event.preventDefault();
   const form = event.currentTarget;
+  if (saleSaveInFlight) return;
   const data = Object.fromEntries(new FormData(form));
   const products = new FormData(form).getAll("products");
   if (!products.length) {
@@ -1600,10 +1606,25 @@ async function handleSaleSubmit(event) {
   } else {
     applyKnownSaleAttribution(sale);
   }
-  const saved = await saveSale(sale, "Venta registrada");
-  if (saved) {
-    form.reset();
-    form.elements.date.value = today();
+  const submitButton = form.querySelector('button[type="submit"]');
+  const originalButtonText = submitButton?.textContent || "Guardar venta";
+  try {
+    saleSaveInFlight = true;
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.textContent = "Guardando...";
+    }
+    const saved = await saveSale(sale, "Venta registrada");
+    if (saved) {
+      form.reset();
+      form.elements.date.value = today();
+    }
+  } finally {
+    saleSaveInFlight = false;
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = originalButtonText;
+    }
   }
 }
 
@@ -1911,10 +1932,18 @@ function persistAndRender(message) {
 
 function toast(message) {
   const element = document.getElementById("toast");
-  element.textContent = message;
+  element.textContent = normalizeToastMessage(message);
   element.classList.add("show");
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => element.classList.remove("show"), 2200);
+}
+
+function normalizeToastMessage(message) {
+  const text = String(message || "");
+  if (/^the quota has been exceeded\.?$/i.test(text.trim())) {
+    return "Meta Ads agotó su cuota. Esto no bloquea registrar ventas; guarda la venta otra vez si no viste “Venta registrada”.";
+  }
+  return text;
 }
 
 function escapeHtml(value) {
