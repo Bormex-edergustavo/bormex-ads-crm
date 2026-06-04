@@ -3911,6 +3911,11 @@ async function saveSale(sale, message) {
     toast(message);
     return true;
   } catch (error) {
+    if (isMetaQuotaError(error) && (await confirmRemoteSaleSaved(sale))) {
+      render();
+      toast("Venta registrada. Meta Ads sigue sin cuota, pero no bloqueó el guardado.");
+      return true;
+    }
     toast(`No se guardó la venta: ${formatActionError(error)}`);
     return false;
   }
@@ -3918,10 +3923,26 @@ async function saveSale(sale, message) {
 
 function formatActionError(error) {
   const message = String(error?.message || "intenta de nuevo");
-  if (/quota|cuota|limit|rate/i.test(message)) {
-    return "Meta Ads agotó su cuota, pero la venta no depende de Meta. Recarga el panel para usar la versión corregida e intenta guardar otra vez.";
+  if (isMetaQuotaError(error)) {
+    return "Meta Ads agotó su cuota. Revisa el historial: si aparece ahí, la venta sí quedó guardada.";
   }
   return message;
+}
+
+async function confirmRemoteSaleSaved(sale) {
+  if (!serverAvailable || !sale?.id) return false;
+  try {
+    const remoteState = await api("/api/state");
+    mergeRemoteState(remoteState);
+    saveState();
+    return (state.sales || []).some((item) => item.id === sale.id);
+  } catch {
+    return false;
+  }
+}
+
+function isMetaQuotaError(error) {
+  return /quota|cuota|limit|rate/i.test(String(error?.message || error || ""));
 }
 
 async function editSaleAdId(saleId) {
