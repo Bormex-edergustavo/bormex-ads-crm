@@ -496,6 +496,13 @@ function normalizeAdId(value) {
   return text.replace(/^ad[_\s-]?id[:\s-]*/i, "").trim();
 }
 
+function isPhoneUsedAsAdId(adIdValue, phoneValue) {
+  const adId = normalizeAdId(adIdValue);
+  const phone = normalizePhone(phoneValue);
+  if (!adId || !phone) return false;
+  return adId === phone || normalizePhone(adId) === phone;
+}
+
 function getSaleProducts(sale) {
   if (Array.isArray(sale.products) && sale.products.length) return sale.products;
   if (sale.product) return [sale.product];
@@ -597,7 +604,8 @@ function dashboardSpend() {
 }
 
 function getSaleAttribution(sale) {
-  const saleAdId = normalizeAdId(sale.adId || sale.ad_id || sale.metaAdId);
+  const saleAdIdInput = sale.adId || sale.ad_id || sale.metaAdId;
+  const saleAdId = isPhoneUsedAsAdId(saleAdIdInput, sale.phone) ? "" : normalizeAdId(saleAdIdInput);
   if (saleAdId) {
     const matchedAd = findAdById(saleAdId);
     return {
@@ -621,7 +629,9 @@ function findLeadForPhone(phoneValue) {
 
 function extractStoredAttribution(record, source = "stored") {
   if (!record) return null;
-  const adId = normalizeAdId(record.adId || record.ad_id || record.metaAdId);
+  const adIdInput = record.adId || record.ad_id || record.metaAdId;
+  const recordPhone = record.phone || record.contactId || record.id || record.from || "";
+  const adId = isPhoneUsedAsAdId(adIdInput, recordPhone) ? "" : normalizeAdId(adIdInput);
   const hasAttribution = Boolean(
     adId ||
       record.ad ||
@@ -1601,7 +1611,12 @@ async function handleSaleSubmit(event) {
     sourceConversationId: data.sourceConversationId || "",
   };
 
-  if (normalizeAdId(data.adId)) {
+  const manualAdId = normalizeAdId(data.adId);
+  let saveMessage = "Venta registrada";
+  if (manualAdId && isPhoneUsedAsAdId(manualAdId, sale.phone)) {
+    applyKnownSaleAttribution(sale);
+    saveMessage = "Venta registrada. Ignoré ese número porque es el WhatsApp del cliente.";
+  } else if (manualAdId) {
     applyManualAdAttribution(sale, data.adId);
   } else {
     applyKnownSaleAttribution(sale);
@@ -1614,7 +1629,7 @@ async function handleSaleSubmit(event) {
       submitButton.disabled = true;
       submitButton.textContent = "Guardando...";
     }
-    const saved = await saveSale(sale, "Venta registrada");
+    const saved = await saveSale(sale, saveMessage);
     if (saved) {
       form.reset();
       form.elements.date.value = today();
@@ -1640,6 +1655,9 @@ function applyManualAdAttribution(sale, adIdInput, options = {}) {
       sale.attributionSource = "";
     }
     return sale;
+  }
+  if (isPhoneUsedAsAdId(adId, sale.phone)) {
+    return applyKnownSaleAttribution(sale);
   }
   const matchedAd = findAdById(adId);
   sale.adId = adId;
@@ -1706,6 +1724,10 @@ async function editSaleAdId(saleId) {
   const current = normalizeAdId(sale.adId);
   const next = prompt("Pega el ID del anuncio que aparece en Business Suite. Déjalo vacío para quitarlo.", current);
   if (next === null) return;
+  if (isPhoneUsedAsAdId(next, sale.phone)) {
+    toast("Ese número es el WhatsApp del cliente, no el ID del anuncio.");
+    return;
+  }
   const updated = applyManualAdAttribution({ ...sale }, next, { clearWhenEmpty: true });
   await saveSale(updated, updated.adId ? "ID de anuncio guardado" : "ID de anuncio quitado");
 }
@@ -1780,6 +1802,10 @@ async function saveConversationAd(event) {
   if (!conversation) return;
   const data = Object.fromEntries(new FormData(event.currentTarget));
   const adId = normalizeAdId(data.adId);
+  if (isPhoneUsedAsAdId(adId, conversation.phone || conversation.contactId || conversation.id)) {
+    toast("Ese número es el WhatsApp del cliente, no el ID del anuncio.");
+    return;
+  }
   const matchedAd = findAdById(adId);
   await saveConversationPatch(
     {
