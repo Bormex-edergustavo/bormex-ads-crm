@@ -16,6 +16,7 @@ const PORT = Number(process.env.PORT || 4173);
 const HOST = process.env.HOST || "127.0.0.1";
 const DEFAULT_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v24.0";
 const ADS_SYNC_INTERVAL_MS = Number(process.env.ADS_SYNC_INTERVAL_MINUTES || 15) * 60 * 1000;
+const ADS_RANGE_CACHE_LIMIT = 16;
 
 const mime = {
   ".html": "text/html; charset=utf-8",
@@ -32,6 +33,7 @@ const defaultDb = {
   spend: [],
   ads: [],
   campaignPeriods: [],
+  adsRangeCache: [],
   rules: {
     targetCpa: 600,
     minRoas: 2,
@@ -110,7 +112,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/ads-range" && req.method === "POST") {
-      return json(res, await syncMetaAds(await readJson(req)));
+      return json(res, await syncMetaAdsRange(await readJson(req)));
     }
 
     if (url.pathname === "/api/meta/coexistence/sync" && req.method === "POST") {
@@ -132,7 +134,8 @@ const server = http.createServer(async (req, res) => {
       const db = await readDb();
       const payload = await syncMetaAds(body);
       db.ads = payload.ads;
-      db.spend = payload.spend;
+      db.adsRangeCache = rememberAdsRangeCache(db.adsRangeCache, payload);
+      if (isSingleDayRange(payload.range)) db.spend = upsertById(db.spend, payload.spend);
       db.lastAdsSync = new Date().toISOString();
       db.lastAdsRange = payload.range;
       await writeDb(db);
@@ -415,6 +418,157 @@ async function writeDb(db) {
   await writeFile(dbPath, JSON.stringify(db, null, 2));
 }
 
+async function syncMetaAdsRange(options = {}) {
+  const range = normalizeSyncRange(options);
+  try {
+    const payload = await syncMetaAds(range);
+    const db = await readDb();
+    db.adsRangeCache = rememberAdsRangeCache(db.adsRangeCache, payload);
+    await writeDb(db);
+    return { ...payload, cacheStatus: "fresh", syncedAt: new Date().toISOString() };
+  } catch (error) {
+    const cached = await readCachedAdsRange(range, error);
+    if (cached) return cached;
+    throw new Error(formatMetaAdsSyncError(error));
+  }
+}
+
+function rememberAdsRangeCache(cache, payload) {
+  const key = adsRangeKey(payload.range);
+  const entry = {
+    key,
+    at: new Date().toISOString(),
+    range: payload.range,
+    ads: payload.ads || [],
+    spend: payload.spend || [],
+  };
+  return [entry, ...normalizeAdsRangeCache(cache).filter((item) => item.key !== key)].slice(0, ADS_RANGE_CACHE_LIMIT);
+}
+
+async function readCachedAdsRange(range, error) {
+  const db = await readDb();
+  const exact = normalizeAdsRangeCache(db.adsRangeCache).find((item) => item.key === adsRangeKey(range));
+  if (exact) {
+    return {
+      ads: exact.ads || [],
+      spend: exact.spend || [],
+      range: exact.range || range,
+      cacheStatus: "exact-cache",
+      cachedAt: exact.at || "",
+      warning: cachedAdsWarning(error),
+    };
+  }
+
+  const daily = buildDailyCachedAdsRange(range, db);
+  if (!daily) return null;
+  return {
+    ...daily,
+    cacheStatus: "daily-cache",
+    warning: cachedAdsWarning(error),
+  };
+}
+
+function buildDailyCachedAdsRange(range, db) {
+  const dailyRows = (db.spend || []).filter((spend) => isDailyMetaSpendInRange(spend, range));
+  if (!dailyRows.length) return null;
+  const coveredDays = new Set(dailyRows.map((spend) => String(spend.rangeStart || spend.date || "")));
+  const expectedDays = daysInRange(range);
+  if (!expectedDays.every((day) => coveredDays.has(day))) return null;
+
+  const adsById = new Map((db.ads || []).map((ad) => [String(ad.id || ad.adId || ""), ad]));
+  const grouped = new Map();
+  for (const spend of dailyRows) {
+    const adId = normalizeAdId(spend.adId || spend.ad_id || "");
+    const key = adId || `${spend.campaign || "Sin campaña"}::${spend.ad || "Sin anuncio"}`;
+    const row = grouped.get(key) || {
+      source: "meta",
+      campaign: spend.campaign || "Sin campaña",
+      campaignId: spend.campaignId || "",
+      adset: spend.adset || "",
+      adsetId: spend.adsetId || "",
+      ad: spend.ad || "Sin anuncio",
+      adId,
+      spend: 0,
+      dailyBudget: 0,
+      messages: 0,
+    };
+    row.spend += Number(spend.spend || 0);
+    row.dailyBudget = Math.max(Number(row.dailyBudget || 0), Number(spend.dailyBudget || 0));
+    row.messages += Number(spend.messages || 0);
+    grouped.set(key, row);
+  }
+
+  const spend = [...grouped.values()].map((row) => ({
+    ...row,
+    id: `meta_spend_${row.adId || row.ad}_${range.since}_${range.until}`,
+    date: range.since === range.until ? range.since : `${range.since} - ${range.until}`,
+    rangeStart: range.since,
+    rangeEnd: range.until,
+  }));
+  const ads = spend.map((row) => {
+    const ad = adsById.get(String(row.adId || "")) || {};
+    return {
+      ...ad,
+      id: row.adId || ad.id || "",
+      name: ad.name || row.ad || "Sin anuncio",
+      campaign: ad.campaign || row.campaign || "Sin campaña",
+      campaignId: ad.campaignId || row.campaignId || "",
+      adset: ad.adset || row.adset || "",
+      adsetId: ad.adsetId || row.adsetId || "",
+      dailyBudget: row.dailyBudget,
+      spend: row.spend,
+      messages: row.messages,
+      rangeStart: range.since,
+      rangeEnd: range.until,
+    };
+  });
+  return { ads, spend, range };
+}
+
+function normalizeAdsRangeCache(value) {
+  return (Array.isArray(value) ? value : []).filter((item) => item?.range?.since && item?.range?.until);
+}
+
+function adsRangeKey(range) {
+  return `${range.since}..${range.until}`;
+}
+
+function isSingleDayRange(range = {}) {
+  return Boolean(range.since && range.since === range.until);
+}
+
+function isDailyMetaSpendInRange(spend, range) {
+  if (spend.source !== "meta") return false;
+  const start = String(spend.rangeStart || spend.date || "");
+  const end = String(spend.rangeEnd || spend.date || start);
+  if (!start || !end || start !== end) return false;
+  return start >= range.since && start <= range.until;
+}
+
+function daysInRange(range) {
+  const days = [];
+  const cursor = new Date(`${range.since}T12:00:00Z`);
+  const end = new Date(`${range.until}T12:00:00Z`);
+  while (cursor <= end) {
+    days.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return days;
+}
+
+function cachedAdsWarning(error) {
+  const message = formatMetaAdsSyncError(error);
+  return `${message} Mostrando el último dato real guardado para este rango.`;
+}
+
+function formatMetaAdsSyncError(error) {
+  const message = error instanceof Error ? error.message : String(error || "Meta Ads no respondió");
+  if (/quota|cuota|limit|rate/i.test(message)) {
+    return "Meta Ads no permitió actualizar este rango porque la cuota del API se agotó.";
+  }
+  return message;
+}
+
 async function syncMetaAds(options = {}) {
   const token = metaAdsAccessToken();
   const rawAccountId = process.env.META_AD_ACCOUNT_ID;
@@ -481,7 +635,8 @@ async function syncMetaAdsIntoDb() {
   const db = await readDb();
   const payload = await syncMetaAds();
   db.ads = payload.ads;
-  db.spend = payload.spend;
+  db.adsRangeCache = rememberAdsRangeCache(db.adsRangeCache, payload);
+  if (isSingleDayRange(payload.range)) db.spend = upsertById(db.spend, payload.spend);
   db.lastAdsSync = new Date().toISOString();
   db.lastAdsRange = payload.range;
   await writeDb(db);

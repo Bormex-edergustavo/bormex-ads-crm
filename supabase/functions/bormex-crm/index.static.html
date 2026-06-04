@@ -2271,6 +2271,10 @@ const defaultState = {
   rangeAds: [],
   rangeSpend: [],
   rangeMetaRange: null,
+  rangeMetaStatus: "",
+  rangeLoadError: "",
+  lastAdsSync: null,
+  lastAdsRange: null,
   filters: {
     startDate: "",
     endDate: "",
@@ -2641,11 +2645,24 @@ async function syncAdsFromMeta() {
     state.rangeSpend = remoteState.spend || [];
     state.rangeAds = remoteState.ads || [];
     state.rangeMetaRange = remoteState.range || { since: range.startDate, until: range.endDate };
+    state.rangeMetaStatus = remoteState.cacheStatus || "fresh";
+    state.rangeLoadError = "";
+    state.lastAdsRange = state.rangeMetaRange;
+    state.lastAdsSync = remoteState.syncedAt || state.lastAdsSync || new Date().toISOString();
     saveState();
     render();
-    toast(`Panel actualizado del ${range.startDate} al ${range.endDate}`);
+    toast(remoteState.warning || `Panel actualizado del ${range.startDate} al ${range.endDate}`);
+    return true;
   } catch (error) {
-    toast(error.message);
+    state.rangeLoadError = formatRangeLoadError(error);
+    state.rangeAds = [];
+    state.rangeSpend = [];
+    state.rangeMetaRange = null;
+    state.rangeMetaStatus = "";
+    saveState();
+    render();
+    toast(state.rangeLoadError);
+    return false;
   } finally {
     if (button) {
       button.textContent = "Sincronizar anuncios activos";
@@ -2656,6 +2673,14 @@ async function syncAdsFromMeta() {
       rangeButton.disabled = false;
     }
   }
+}
+
+function formatRangeLoadError(error) {
+  const message = String(error?.message || "No se pudo actualizar el rango");
+  if (/quota|cuota|limit|rate/i.test(message)) {
+    return "Meta Ads no permitió actualizar este rango porque la cuota del API se agotó. No estoy mezclando gasto de otro rango; intenta de nuevo más tarde.";
+  }
+  return message;
 }
 
 async function refreshMetaSetup() {
@@ -2750,7 +2775,11 @@ function getSelectedRange() {
 function setSelectedRange(startDate, endDate) {
   if (!startDate || !endDate) throw new Error("Selecciona fecha de inicio y fecha fin");
   if (startDate > endDate) throw new Error("La fecha de inicio no puede ser mayor que la fecha fin");
+  const previous = getSelectedRange();
   state.filters = { ...(state.filters || {}), startDate, endDate };
+  if (previous.startDate !== startDate || previous.endDate !== endDate) {
+    state.rangeLoadError = "";
+  }
   saveState();
 }
 
@@ -2782,12 +2811,21 @@ function hasLoadedSelectedRange() {
   return state.rangeMetaRange?.since === range.startDate && state.rangeMetaRange?.until === range.endDate;
 }
 
+function hasSyncedSelectedRange() {
+  const range = getSelectedRange();
+  return state.lastAdsRange?.since === range.startDate && state.lastAdsRange?.until === range.endDate;
+}
+
 function dashboardAds() {
-  return hasLoadedSelectedRange() ? state.rangeAds || [] : state.ads || [];
+  if (hasLoadedSelectedRange()) return state.rangeAds || [];
+  return hasSyncedSelectedRange() ? state.ads || [] : [];
 }
 
 function dashboardSpend() {
-  return hasLoadedSelectedRange() ? state.rangeSpend || [] : state.spend || [];
+  const manualSpend = (state.spend || []).filter((spend) => spend.source !== "meta");
+  if (hasLoadedSelectedRange()) return [...(state.rangeSpend || []), ...manualSpend];
+  if (hasSyncedSelectedRange()) return state.spend || [];
+  return manualSpend;
 }
 
 function getSaleAttribution(sale) {
@@ -3089,9 +3127,14 @@ function renderRangeForm() {
   if (status) {
     const loaded = hasLoadedSelectedRange();
     const rangeText = `${range.startDate} a ${range.endDate}`;
-    status.textContent = loaded
-      ? `Mostrando datos de Meta Ads del ${rangeText}.`
-      : `Rango seleccionado: ${rangeText}. Presiona Actualizar rango para traer gasto y mensajes de Meta Ads.`;
+    if (loaded) {
+      const source = state.rangeMetaStatus && state.rangeMetaStatus !== "fresh" ? "guardados previamente" : "actualizados";
+      status.textContent = `Mostrando datos de Meta Ads ${source} del ${rangeText}.`;
+    } else if (state.rangeLoadError) {
+      status.textContent = `${state.rangeLoadError} Rango seleccionado: ${rangeText}.`;
+    } else {
+      status.textContent = `Rango seleccionado: ${rangeText}. Presiona Actualizar rango para traer gasto y mensajes de Meta Ads.`;
+    }
   }
 }
 
@@ -4041,6 +4084,8 @@ function mergeRemoteState(remoteState = {}) {
   state.crmTags = Array.isArray(remoteState.crmTags) ? remoteState.crmTags : state.crmTags;
   state.campaignPeriods = Array.isArray(remoteState.campaignPeriods) ? remoteState.campaignPeriods : state.campaignPeriods;
   state.rules = remoteState.rules || state.rules;
+  state.lastAdsSync = remoteState.lastAdsSync || state.lastAdsSync;
+  state.lastAdsRange = remoteState.lastAdsRange || state.lastAdsRange;
 }
 
 function mergeRemoteRows(localRows = [], remoteRows, dateFields = []) {
