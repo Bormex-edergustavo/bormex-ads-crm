@@ -13,6 +13,7 @@ const MEDIA_UPLOAD_LIMITS = {
   audio: 16 * 1024 * 1024,
   document: 100 * 1024 * 1024,
 };
+const SAFE_SCALE_RATE = 0.15;
 
 const defaultState = {
   conversations: [],
@@ -844,6 +845,9 @@ function getPerformance() {
     map.set(key, {
       key,
       campaign: ad.campaign || "Sin campaña",
+      campaignId: ad.campaignId || "",
+      adset: ad.adset || "",
+      adsetId: ad.adsetId || "",
       ad: ad.name || "Sin anuncio",
       adId: ad.id || "",
       leads: 0,
@@ -862,6 +866,9 @@ function getPerformance() {
       map.set(key, {
         key,
         campaign: lead.campaign || "Sin campaña",
+        campaignId: lead.campaignId || "",
+        adset: lead.adset || "",
+        adsetId: lead.adsetId || "",
         ad: lead.ad || "Sin anuncio",
         adId: lead.adId || "",
         leads: 0,
@@ -885,6 +892,9 @@ function getPerformance() {
       map.set(key, {
         key,
         campaign: spend.campaign || "Sin campaña",
+        campaignId: spend.campaignId || "",
+        adset: spend.adset || "",
+        adsetId: spend.adsetId || "",
         ad: spend.ad || "Sin anuncio",
         adId: spend.adId || "",
         leads: 0,
@@ -904,6 +914,9 @@ function getPerformance() {
       row.metaSpendMessages = Number(row.metaSpendMessages || 0) + Number(spend.messages || 0);
       row.messages = Math.max(Number(row.messages || 0), row.metaSpendMessages);
     }
+    row.campaignId = row.campaignId || spend.campaignId || "";
+    row.adset = row.adset || spend.adset || "";
+    row.adsetId = row.adsetId || spend.adsetId || "";
     row.dailyBudget = Math.max(row.dailyBudget, Number(spend.dailyBudget || 0));
   }
 
@@ -916,6 +929,8 @@ function getPerformance() {
         key,
         campaign: attribution.campaign || "Sin campaña",
         campaignId: attribution.campaignId || "",
+        adset: attribution.adset || "",
+        adsetId: attribution.adsetId || "",
         ad: attribution.ad || "Sin anuncio",
         adId: attribution.adId || "",
         leads: 0,
@@ -962,6 +977,68 @@ function recommendationLabel(value) {
     reduce: "Bajar",
     pause: "Pausar",
   }[value];
+}
+
+function getScalePlan(row) {
+  if (row.recommendation !== "scale") return null;
+  const currentBudget = Number(row.dailyBudget || 0);
+  if (!currentBudget) {
+    return {
+      actionable: false,
+      reason: row.campaignId ? "Revisa presupuesto de campaña en Meta" : "Sin presupuesto editable detectado",
+    };
+  }
+  const suggestedBudget = currentBudget + Math.max(1, Math.round(currentBudget * SAFE_SCALE_RATE));
+  const increase = suggestedBudget - currentBudget;
+  const percent = currentBudget ? (increase / currentBudget) * 100 : 0;
+  return {
+    actionable: Boolean(row.adsetId),
+    currentBudget,
+    suggestedBudget,
+    increase,
+    percent,
+    adsetId: row.adsetId || "",
+    campaignId: row.campaignId || "",
+  };
+}
+
+function adsManagerAdsetUrl(adsetId) {
+  return `https://adsmanager.facebook.com/adsmanager/manage/adsets?selected_adset_ids=${encodeURIComponent(adsetId)}`;
+}
+
+function scalePlanCopy(row, plan) {
+  return [
+    `Escalar ${row.ad}`,
+    `Conjunto: ${row.adset || "Sin conjunto"}`,
+    `Presupuesto actual: ${money.format(plan.currentBudget)}/día`,
+    `Siguiente paso seguro: ${money.format(plan.suggestedBudget)}/día (+${numberFormat.format(plan.percent)}%)`,
+    "No cambiar audiencia ni creativo en este ajuste.",
+  ].join("\n");
+}
+
+function renderRecommendationAction(row) {
+  const badge = `<span class="badge ${row.recommendation}">${recommendationLabel(row.recommendation)}</span>`;
+  const plan = getScalePlan(row);
+  if (!plan) return badge;
+  if (!plan.actionable) {
+    return `
+      <div class="scale-action">
+        ${badge}
+        <small>${escapeHtml(plan.reason)}</small>
+      </div>
+    `;
+  }
+  const copy = scalePlanCopy(row, plan);
+  return `
+    <div class="scale-action">
+      ${badge}
+      <small>${money.format(plan.currentBudget)} → ${money.format(plan.suggestedBudget)}/día (+${numberFormat.format(plan.percent)}%)</small>
+      <div class="scale-actions">
+        <a class="secondary-button compact" href="${escapeHtml(adsManagerAdsetUrl(plan.adsetId))}" target="_blank" rel="noopener noreferrer">Abrir Meta</a>
+        <button class="ghost-button compact" type="button" data-copy-scale-plan="${escapeHtml(copy)}">Copiar</button>
+      </div>
+    </div>
+  `;
 }
 
 function render() {
@@ -1066,7 +1143,7 @@ function renderPerformance() {
           <td>${row.messages ? money.format(row.costPerMessage) : "Sin mensajes"}</td>
           <td>${row.sales ? money.format(row.cpa) : "Sin ventas"}</td>
           <td>${row.spend ? `${numberFormat.format(row.roas)}x` : "0.00x"}</td>
-          <td><span class="badge ${row.recommendation}">${recommendationLabel(row.recommendation)}</span></td>
+          <td>${renderRecommendationAction(row)}</td>
         </tr>
       `,
     )
@@ -2291,6 +2368,19 @@ document.getElementById("syncAds").addEventListener("click", syncAdsFromMeta);
 document.getElementById("refreshMetaSetup").addEventListener("click", refreshMetaSetup);
 
 document.addEventListener("click", (event) => {
+  const copyScaleButton = event.target.closest("[data-copy-scale-plan]");
+  if (copyScaleButton) {
+    if (!navigator.clipboard) {
+      toast("Safari no permitió copiar automáticamente");
+      return;
+    }
+    navigator.clipboard
+      .writeText(copyScaleButton.dataset.copyScalePlan || "")
+      .then(() => toast("Plan de escala copiado"))
+      .catch(() => toast("No pude copiar el plan"));
+    return;
+  }
+
   const conversationButton = event.target.closest("[data-conversation-id]");
   if (conversationButton) {
     activeConversationId = conversationButton.dataset.conversationId;
