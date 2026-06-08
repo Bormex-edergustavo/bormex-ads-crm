@@ -28,6 +28,7 @@ const defaultState = {
   rangeMetaRange: null,
   rangeMetaStatus: "",
   rangeLoadError: "",
+  rangeNotice: "",
   lastAdsSync: null,
   lastAdsRange: null,
   filters: {
@@ -61,7 +62,11 @@ const numberFormat = new Intl.NumberFormat("es-MX", {
   maximumFractionDigits: 2,
 });
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => {
+  const date = new Date();
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+};
 
 function roleFromCode(code) {
   if (String(code || "").trim() === SALES_ACCESS_CODE) return "sales";
@@ -279,6 +284,16 @@ function scheduleFreshSync(delay = 1200) {
   }, delay);
 }
 
+async function refreshCachedState() {
+  try {
+    const remoteState = await api("/api/state");
+    mergeRemoteState(remoteState);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function renderConnectionStatus(config, remoteState, coexistenceSetup = null) {
   const dots = document.querySelectorAll(".connection-dot");
   const inboxDot = document.getElementById("inboxConnectionDot");
@@ -397,6 +412,11 @@ async function syncAdsFromMeta() {
   const button = document.getElementById("syncAds");
   const rangeButton = document.querySelector("#dashboardRangeForm .primary-button");
   const range = getSelectedRange();
+  if (hasRecentLoadedSelectedRange()) {
+    render();
+    toast("Estoy usando el dato real ya cargado para no gastar más cuota de Meta.");
+    return true;
+  }
   if (button) {
     button.disabled = true;
     button.textContent = "Sincronizando...";
@@ -423,10 +443,15 @@ async function syncAdsFromMeta() {
     return true;
   } catch (error) {
     state.rangeLoadError = formatRangeLoadError(error);
-    state.rangeAds = [];
-    state.rangeSpend = [];
-    state.rangeMetaRange = null;
-    state.rangeMetaStatus = "";
+    if (!hasLoadedSelectedRange()) {
+      state.rangeAds = [];
+      state.rangeSpend = [];
+      state.rangeMetaRange = null;
+      state.rangeMetaStatus = "";
+    } else {
+      state.rangeMetaStatus = state.rangeMetaStatus || "cached";
+    }
+    await refreshCachedState();
     saveState();
     render();
     if (!isSalesViewActive() && !saleSaveInFlight) toast(state.rangeLoadError);
@@ -446,7 +471,7 @@ async function syncAdsFromMeta() {
 function formatRangeLoadError(error) {
   const message = String(error?.message || "No se pudo actualizar el rango");
   if (/quota|cuota|limit|rate/i.test(message)) {
-    return "Meta Ads no permitió actualizar este rango porque la cuota del API se agotó. No estoy mezclando gasto de otro rango; intenta de nuevo más tarde.";
+    return "Meta Ads no permitió actualizar este rango porque la cuota del API se agotó. Estoy mostrando el gasto real ya guardado para estas fechas cuando existe.";
   }
   return message;
 }
@@ -537,6 +562,18 @@ function ensureDateFilters() {
   state.filters = state.filters || {};
   state.filters.startDate = state.filters.startDate || today();
   state.filters.endDate = state.filters.endDate || state.filters.startDate;
+  try {
+    const normalized = normalizeSelectedRange(state.filters.startDate, state.filters.endDate);
+    state.filters.startDate = normalized.startDate;
+    state.filters.endDate = normalized.endDate;
+    if (normalized.clamped && !state.rangeNotice) {
+      state.rangeNotice = "Ajusté el rango hasta hoy porque Meta Ads no entrega gasto futuro.";
+    }
+  } catch {
+    state.filters.startDate = today();
+    state.filters.endDate = today();
+    state.rangeNotice = "Restablecí el rango a hoy porque las fechas guardadas no eran válidas.";
+  }
 }
 
 function getSelectedRange() {
@@ -547,15 +584,36 @@ function getSelectedRange() {
   };
 }
 
+function normalizeSelectedRange(startDate, endDate) {
+  const maxDate = today();
+  let normalizedStart = String(startDate || "").slice(0, 10);
+  let normalizedEnd = String(endDate || "").slice(0, 10);
+  if (!normalizedStart || !normalizedEnd) throw new Error("Selecciona fecha de inicio y fecha fin");
+  let clamped = false;
+  if (normalizedStart > maxDate) {
+    normalizedStart = maxDate;
+    clamped = true;
+  }
+  if (normalizedEnd > maxDate) {
+    normalizedEnd = maxDate;
+    clamped = true;
+  }
+  if (normalizedStart > normalizedEnd) throw new Error("La fecha de inicio no puede ser mayor que la fecha fin");
+  return { startDate: normalizedStart, endDate: normalizedEnd, clamped };
+}
+
 function setSelectedRange(startDate, endDate) {
-  if (!startDate || !endDate) throw new Error("Selecciona fecha de inicio y fecha fin");
-  if (startDate > endDate) throw new Error("La fecha de inicio no puede ser mayor que la fecha fin");
+  const normalized = normalizeSelectedRange(startDate, endDate);
   const previous = getSelectedRange();
-  state.filters = { ...(state.filters || {}), startDate, endDate };
-  if (previous.startDate !== startDate || previous.endDate !== endDate) {
+  state.filters = { ...(state.filters || {}), startDate: normalized.startDate, endDate: normalized.endDate };
+  state.rangeNotice = normalized.clamped
+    ? "Ajusté el rango hasta hoy porque Meta Ads no entrega gasto futuro."
+    : "";
+  if (previous.startDate !== normalized.startDate || previous.endDate !== normalized.endDate) {
     state.rangeLoadError = "";
   }
   saveState();
+  return normalized;
 }
 
 function isDateInSelectedRange(dateValue) {
@@ -586,6 +644,12 @@ function hasLoadedSelectedRange() {
   return state.rangeMetaRange?.since === range.startDate && state.rangeMetaRange?.until === range.endDate;
 }
 
+function hasRecentLoadedSelectedRange(maxAgeMs = 2 * 60 * 1000) {
+  if (!hasLoadedSelectedRange()) return false;
+  const syncedAt = Date.parse(String(state.lastAdsSync || ""));
+  return Number.isFinite(syncedAt) && Date.now() - syncedAt < maxAgeMs;
+}
+
 function hasSyncedSelectedRange() {
   const range = getSelectedRange();
   return state.lastAdsRange?.since === range.startDate && state.lastAdsRange?.until === range.endDate;
@@ -596,11 +660,26 @@ function dashboardAds() {
   return hasSyncedSelectedRange() ? state.ads || [] : [];
 }
 
+function isDailyMetaSpend(spend) {
+  if (spend.source !== "meta") return false;
+  const start = String(spend.rangeStart || spend.date || "");
+  const end = String(spend.rangeEnd || spend.date || start);
+  return Boolean(start && end && start === end);
+}
+
+function cachedDailyMetaSpendForSelectedRange() {
+  return (state.spend || []).filter(isDailyMetaSpend).filter(spendMatchesSelectedRange);
+}
+
+function shouldUseCachedSpendMessages() {
+  return !hasLoadedSelectedRange() && !hasSyncedSelectedRange();
+}
+
 function dashboardSpend() {
   const manualSpend = (state.spend || []).filter((spend) => spend.source !== "meta");
   if (hasLoadedSelectedRange()) return [...(state.rangeSpend || []), ...manualSpend];
   if (hasSyncedSelectedRange()) return state.spend || [];
-  return manualSpend;
+  return [...cachedDailyMetaSpendForSelectedRange(), ...manualSpend];
 }
 
 function getSaleAttribution(sale) {
@@ -756,6 +835,7 @@ function conversationDueStatus(conversation) {
 function getPerformance() {
   const map = new Map();
   const liveAdKeys = new Set();
+  const useCachedSpendMessages = shouldUseCachedSpendMessages();
 
   for (const ad of dashboardAds()) {
     const key = ad.id || `${ad.campaign || "Sin campaña"}::${ad.name || "Sin anuncio"}`;
@@ -820,6 +900,10 @@ function getPerformance() {
     row.spend = liveAdKeys.has(key)
       ? Math.max(Number(row.spend || 0), Number(spend.spend || 0))
       : Number(row.spend || 0) + Number(spend.spend || 0);
+    if (useCachedSpendMessages && spend.source === "meta") {
+      row.metaSpendMessages = Number(row.metaSpendMessages || 0) + Number(spend.messages || 0);
+      row.messages = Math.max(Number(row.messages || 0), row.metaSpendMessages);
+    }
     row.dailyBudget = Math.max(row.dailyBudget, Number(spend.dailyBudget || 0));
   }
 
@@ -899,19 +983,29 @@ function renderRangeForm() {
   const form = document.getElementById("dashboardRangeForm");
   if (!form) return;
   const range = getSelectedRange();
+  const maxDate = today();
+  form.elements.startDate.max = maxDate;
+  form.elements.endDate.max = maxDate;
   if (document.activeElement !== form.elements.startDate) form.elements.startDate.value = range.startDate;
   if (document.activeElement !== form.elements.endDate) form.elements.endDate.value = range.endDate;
   const status = document.getElementById("dashboardRangeStatus");
   if (status) {
     const loaded = hasLoadedSelectedRange();
+    const cachedRows = cachedDailyMetaSpendForSelectedRange();
     const rangeText = `${range.startDate} a ${range.endDate}`;
+    const notice = state.rangeNotice ? `${state.rangeNotice} ` : "";
     if (loaded) {
       const source = state.rangeMetaStatus && state.rangeMetaStatus !== "fresh" ? "guardados previamente" : "actualizados";
-      status.textContent = `Mostrando datos de Meta Ads ${source} del ${rangeText}.`;
+      status.textContent = `${notice}Mostrando datos de Meta Ads ${source} del ${rangeText}.`;
     } else if (state.rangeLoadError) {
-      status.textContent = `${state.rangeLoadError} Rango seleccionado: ${rangeText}.`;
+      const fallback = cachedRows.length
+        ? ` Mostrando ${cachedRows.length} registros diarios guardados en Supabase para las fechas disponibles.`
+        : " No hay gasto guardado para ese rango todavía.";
+      status.textContent = `${notice}${state.rangeLoadError}${fallback} Rango seleccionado: ${rangeText}.`;
+    } else if (cachedRows.length) {
+      status.textContent = `${notice}Mostrando gasto de Meta Ads guardado en Supabase para ${rangeText}. Presiona Actualizar rango para refrescar desde Meta.`;
     } else {
-      status.textContent = `Rango seleccionado: ${rangeText}. Presiona Actualizar rango para traer gasto y mensajes de Meta Ads.`;
+      status.textContent = `${notice}Rango seleccionado: ${rangeText}. Presiona Actualizar rango para traer gasto y mensajes de Meta Ads.`;
     }
   }
 }
