@@ -2278,6 +2278,7 @@ const SIDEBAR_COLLAPSED_KEY = "ventas_ads_sidebar_collapsed_v1";
 const ADS_ACCESS_CODE = "2607";
 const SALES_ACCESS_CODE = "1234";
 const API_BASE = getApiBase();
+const ADS_CONTROL_API_BASE = getAdsControlApiBase();
 let panelCode = localStorage.getItem(AUTH_STORAGE_KEY) || "";
 let accessRole = roleFromCode(panelCode);
 const MEDIA_TYPES = new Set(["image", "video", "audio", "document"]);
@@ -2434,6 +2435,28 @@ async function api(path, options = {}) {
   return payload;
 }
 
+async function adsControlApi(path, options = {}) {
+  const headers = {
+    "content-type": "application/json",
+    ...(options.headers || {}),
+  };
+  if (panelCode) {
+    headers.Authorization = `Basic ${btoa(`panel:${panelCode}`)}`;
+  }
+
+  const response = await fetch(`${ADS_CONTROL_API_BASE}${path}`, {
+    ...options,
+    headers,
+  });
+  const contentType = response.headers.get("content-type") || "";
+  const payload = contentType.includes("application/json")
+    ? await response.json()
+    : { error: await response.text() };
+  if (response.status === 401) throw new Error("Ingresa con el código Ads para modificar Meta");
+  if (!response.ok) throw new Error(payload.error || "No se pudo modificar Meta Ads");
+  return payload;
+}
+
 async function apiForm(path, formData) {
   const headers = {};
   if (panelCode) {
@@ -2483,6 +2506,11 @@ function getApiBase() {
   if (configured) return configured.replace(/\/$/, "");
   const firstPathPart = window.location.pathname.split("/").filter(Boolean)[0];
   return firstPathPart === "bormex-crm" ? "/bormex-crm" : "";
+}
+
+function getAdsControlApiBase() {
+  if (API_BASE.includes("/bormex-crm")) return API_BASE.replace(/\/bormex-crm\/?$/, "/bormex-ads-control");
+  return "https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-ads-control";
 }
 
 function showAuthGate() {
@@ -3124,6 +3152,8 @@ function getPerformance() {
       adsetId: ad.adsetId || "",
       ad: ad.name || "Sin anuncio",
       adId: ad.id || "",
+      status: ad.status || "",
+      effectiveStatus: ad.effectiveStatus || ad.effective_status || "",
       leads: 0,
       trackedLeads: 0,
       messages: metaMessages,
@@ -3145,6 +3175,8 @@ function getPerformance() {
         adsetId: lead.adsetId || "",
         ad: lead.ad || "Sin anuncio",
         adId: lead.adId || "",
+        status: lead.status || "",
+        effectiveStatus: lead.effectiveStatus || "",
         leads: 0,
         trackedLeads: 0,
         messages: 0,
@@ -3171,6 +3203,8 @@ function getPerformance() {
         adsetId: spend.adsetId || "",
         ad: spend.ad || "Sin anuncio",
         adId: spend.adId || "",
+        status: spend.status || "",
+        effectiveStatus: spend.effectiveStatus || "",
         leads: 0,
         trackedLeads: 0,
         messages: 0,
@@ -3191,6 +3225,8 @@ function getPerformance() {
     row.campaignId = row.campaignId || spend.campaignId || "";
     row.adset = row.adset || spend.adset || "";
     row.adsetId = row.adsetId || spend.adsetId || "";
+    row.status = row.status || spend.status || "";
+    row.effectiveStatus = row.effectiveStatus || spend.effectiveStatus || "";
     row.dailyBudget = Math.max(row.dailyBudget, Number(spend.dailyBudget || 0));
   }
 
@@ -3207,6 +3243,8 @@ function getPerformance() {
         adsetId: attribution.adsetId || "",
         ad: attribution.ad || "Sin anuncio",
         adId: attribution.adId || "",
+        status: attribution.status || "",
+        effectiveStatus: attribution.effectiveStatus || "",
         leads: 0,
         trackedLeads: 0,
         messages: 0,
@@ -3255,6 +3293,10 @@ function recommendationLabel(value) {
 
 function getScalePlan(row) {
   if (row.recommendation !== "scale") return null;
+  return getBudgetPlan(row, "increase_budget");
+}
+
+function getBudgetPlan(row, action) {
   const currentBudget = Number(row.dailyBudget || 0);
   if (!currentBudget) {
     return {
@@ -3262,14 +3304,15 @@ function getScalePlan(row) {
       reason: row.campaignId ? "Revisa presupuesto de campaña en Meta" : "Sin presupuesto editable detectado",
     };
   }
-  const suggestedBudget = currentBudget + Math.max(1, Math.round(currentBudget * SAFE_SCALE_RATE));
-  const increase = suggestedBudget - currentBudget;
-  const percent = currentBudget ? (increase / currentBudget) * 100 : 0;
+  const step = Math.max(1, Math.round(currentBudget * SAFE_SCALE_RATE));
+  const suggestedBudget = action === "decrease_budget" ? Math.max(1, currentBudget - step) : currentBudget + step;
+  const difference = suggestedBudget - currentBudget;
+  const percent = currentBudget ? Math.abs(difference / currentBudget) * 100 : 0;
   return {
     actionable: Boolean(row.adsetId),
     currentBudget,
     suggestedBudget,
-    increase,
+    difference,
     percent,
     adsetId: row.adsetId || "",
     campaignId: row.campaignId || "",
@@ -3292,27 +3335,100 @@ function scalePlanCopy(row, plan) {
 
 function renderRecommendationAction(row) {
   const badge = `<span class="badge ${row.recommendation}">${recommendationLabel(row.recommendation)}</span>`;
-  const plan = getScalePlan(row);
-  if (!plan) return badge;
-  if (!plan.actionable) {
+  const increasePlan = getBudgetPlan(row, "increase_budget");
+  const decreasePlan = getBudgetPlan(row, "decrease_budget");
+  const scalePlan = getScalePlan(row);
+  if (!row.adsetId) {
     return `
       <div class="scale-action">
         ${badge}
-        <small>${escapeHtml(plan.reason)}</small>
+        <small>Sin conjunto editable detectado</small>
       </div>
     `;
   }
-  const copy = scalePlanCopy(row, plan);
+  const isPaused = /paused/i.test(`${row.status} ${row.effectiveStatus}`);
+  const statusAction = isPaused ? "activate" : "pause";
+  const statusLabel = isPaused ? "Activar" : "Pausar";
+  const statusClass = isPaused ? "secondary-button" : "danger-button";
+  const copy = scalePlan ? scalePlanCopy(row, scalePlan) : "";
   return `
     <div class="scale-action">
       ${badge}
-      <small>${money.format(plan.currentBudget)} → ${money.format(plan.suggestedBudget)}/día (+${numberFormat.format(plan.percent)}%)</small>
+      ${increasePlan.actionable ? `<small>${money.format(increasePlan.currentBudget)}/día · paso ${numberFormat.format(increasePlan.percent)}%</small>` : `<small>${escapeHtml(increasePlan.reason)}</small>`}
       <div class="scale-actions">
-        <a class="secondary-button compact" href="${escapeHtml(adsManagerAdsetUrl(plan.adsetId))}" target="_blank" rel="noopener noreferrer">Abrir Meta</a>
-        <button class="ghost-button compact" type="button" data-copy-scale-plan="${escapeHtml(copy)}">Copiar</button>
+        ${increasePlan.actionable ? `<button class="secondary-button compact" type="button" data-meta-adset-action="increase_budget" data-adset-id="${escapeHtml(row.adsetId)}" data-target-budget="${increasePlan.suggestedBudget}" data-current-budget="${increasePlan.currentBudget}" data-ad-name="${escapeHtml(row.ad)}">Subir</button>` : ""}
+        ${decreasePlan.actionable ? `<button class="ghost-button compact" type="button" data-meta-adset-action="decrease_budget" data-adset-id="${escapeHtml(row.adsetId)}" data-target-budget="${decreasePlan.suggestedBudget}" data-current-budget="${decreasePlan.currentBudget}" data-ad-name="${escapeHtml(row.ad)}">Bajar</button>` : ""}
+        <button class="${statusClass} compact" type="button" data-meta-adset-action="${statusAction}" data-adset-id="${escapeHtml(row.adsetId)}" data-ad-name="${escapeHtml(row.ad)}">${statusLabel}</button>
+        <a class="secondary-button compact" href="${escapeHtml(adsManagerAdsetUrl(row.adsetId))}" target="_blank" rel="noopener noreferrer">Meta</a>
+        ${copy ? `<button class="ghost-button compact" type="button" data-copy-scale-plan="${escapeHtml(copy)}">Copiar</button>` : ""}
       </div>
     </div>
   `;
+}
+
+async function handleMetaAdsetAction(button) {
+  const action = button.dataset.metaAdsetAction || "";
+  const adsetId = button.dataset.adsetId || "";
+  const adName = button.dataset.adName || "este conjunto";
+  const targetBudget = Number(button.dataset.targetBudget || 0);
+  const currentBudget = Number(button.dataset.currentBudget || 0);
+  if (!adsetId) return;
+
+  const prompt =
+    action === "increase_budget"
+      ? `¿Subir presupuesto de "${adName}" de ${money.format(currentBudget)} a ${money.format(targetBudget)}/día?`
+      : action === "decrease_budget"
+        ? `¿Bajar presupuesto de "${adName}" de ${money.format(currentBudget)} a ${money.format(targetBudget)}/día?`
+        : action === "pause"
+          ? `¿Pausar "${adName}"?`
+          : `¿Activar "${adName}"?`;
+  if (!confirm(`${prompt}\n\nEsto modifica Meta Ads en vivo.`)) return;
+
+  const originalText = button.textContent;
+  try {
+    button.disabled = true;
+    button.textContent = "Aplicando...";
+    const result = await adsControlApi(`/api/adsets/${encodeURIComponent(adsetId)}`, {
+      method: "POST",
+      body: JSON.stringify({ action, targetBudget }),
+    });
+    applyMetaControlResult(result);
+    saveState();
+    render();
+    toast(metaControlToast(result));
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+function applyMetaControlResult(result) {
+  const adsetId = String(result?.adsetId || "");
+  const after = result?.after || {};
+  if (!adsetId) return;
+  const patch = {
+    adsetId,
+    dailyBudget: Number(after.dailyBudget || 0),
+    status: after.status || "",
+    effectiveStatus: after.effectiveStatus || "",
+  };
+  const update = (row) => (row.adsetId === adsetId ? { ...row, ...patch } : row);
+  state.rangeAds = (state.rangeAds || []).map(update);
+  state.ads = (state.ads || []).map(update);
+  state.rangeSpend = (state.rangeSpend || []).map(update);
+  state.spend = (state.spend || []).map(update);
+}
+
+function metaControlToast(result) {
+  const action = String(result?.action || "");
+  const after = result?.after || {};
+  if (action === "pause") return "Conjunto pausado en Meta";
+  if (action === "activate") return "Conjunto activado en Meta";
+  if (action === "increase_budget") return `Presupuesto subido a ${money.format(Number(after.dailyBudget || 0))}/día`;
+  if (action === "decrease_budget") return `Presupuesto bajado a ${money.format(Number(after.dailyBudget || 0))}/día`;
+  return "Cambio aplicado en Meta";
 }
 
 function render() {
@@ -4642,6 +4758,12 @@ document.getElementById("syncAds").addEventListener("click", syncAdsFromMeta);
 document.getElementById("refreshMetaSetup").addEventListener("click", refreshMetaSetup);
 
 document.addEventListener("click", (event) => {
+  const metaActionButton = event.target.closest("[data-meta-adset-action]");
+  if (metaActionButton) {
+    handleMetaAdsetAction(metaActionButton);
+    return;
+  }
+
   const copyScaleButton = event.target.closest("[data-copy-scale-plan]");
   if (copyScaleButton) {
     if (!navigator.clipboard) {
