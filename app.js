@@ -1081,13 +1081,16 @@ function renderRecommendationAction(row) {
     <div class="scale-action">
       ${badge}
       ${increasePlan.actionable ? `<small>${money.format(increasePlan.currentBudget)}/día · paso ${numberFormat.format(increasePlan.percent)}%</small>` : `<small>${escapeHtml(increasePlan.reason)}</small>`}
-      <div class="scale-actions">
-        ${increasePlan.actionable ? `<button class="secondary-button compact" type="button" data-meta-adset-action="increase_budget" data-adset-id="${escapeHtml(row.adsetId)}" data-target-budget="${increasePlan.suggestedBudget}" data-current-budget="${increasePlan.currentBudget}" data-ad-name="${escapeHtml(row.ad)}">Subir</button>` : ""}
-        ${decreasePlan.actionable ? `<button class="ghost-button compact" type="button" data-meta-adset-action="decrease_budget" data-adset-id="${escapeHtml(row.adsetId)}" data-target-budget="${decreasePlan.suggestedBudget}" data-current-budget="${decreasePlan.currentBudget}" data-ad-name="${escapeHtml(row.ad)}">Bajar</button>` : ""}
-        <button class="${statusClass} compact" type="button" data-meta-adset-action="${statusAction}" data-adset-id="${escapeHtml(row.adsetId)}" data-ad-name="${escapeHtml(row.ad)}">${statusLabel}</button>
-        <a class="secondary-button compact" href="${escapeHtml(adsManagerAdsetUrl(row.adsetId))}" target="_blank" rel="noopener noreferrer">Meta</a>
-        ${copy ? `<button class="ghost-button compact" type="button" data-copy-scale-plan="${escapeHtml(copy)}">Copiar</button>` : ""}
-      </div>
+      <details class="action-menu">
+        <summary class="secondary-button compact action-menu-trigger">Acciones</summary>
+        <div class="action-menu-panel">
+          ${increasePlan.actionable ? `<button class="secondary-button compact" type="button" data-meta-adset-action="increase_budget" data-adset-id="${escapeHtml(row.adsetId)}" data-target-budget="${increasePlan.suggestedBudget}" data-current-budget="${increasePlan.currentBudget}" data-ad-name="${escapeHtml(row.ad)}">Subir</button>` : ""}
+          ${decreasePlan.actionable ? `<button class="ghost-button compact" type="button" data-meta-adset-action="decrease_budget" data-adset-id="${escapeHtml(row.adsetId)}" data-target-budget="${decreasePlan.suggestedBudget}" data-current-budget="${decreasePlan.currentBudget}" data-ad-name="${escapeHtml(row.ad)}">Bajar</button>` : ""}
+          <button class="${statusClass} compact" type="button" data-meta-adset-action="${statusAction}" data-adset-id="${escapeHtml(row.adsetId)}" data-ad-name="${escapeHtml(row.ad)}">${statusLabel}</button>
+          <a class="secondary-button compact" href="${escapeHtml(adsManagerAdsetUrl(row.adsetId))}" target="_blank" rel="noopener noreferrer">Meta</a>
+          ${copy ? `<button class="ghost-button compact" type="button" data-copy-scale-plan="${escapeHtml(copy)}">Copiar</button>` : ""}
+        </div>
+      </details>
     </div>
   `;
 }
@@ -2483,15 +2486,31 @@ document.getElementById("statusFilter").addEventListener("change", renderPerform
 document.getElementById("syncAds").addEventListener("click", syncAdsFromMeta);
 document.getElementById("refreshMetaSetup").addEventListener("click", refreshMetaSetup);
 
+document.addEventListener(
+  "toggle",
+  (event) => {
+    const menu = event.target.closest?.(".action-menu");
+    if (!menu?.open) return;
+    document.querySelectorAll(".action-menu[open]").forEach((item) => {
+      if (item !== menu) item.open = false;
+    });
+  },
+  true,
+);
+
 document.addEventListener("click", (event) => {
   const metaActionButton = event.target.closest("[data-meta-adset-action]");
   if (metaActionButton) {
+    const menu = metaActionButton.closest(".action-menu");
+    if (menu) menu.open = false;
     handleMetaAdsetAction(metaActionButton);
     return;
   }
 
   const copyScaleButton = event.target.closest("[data-copy-scale-plan]");
   if (copyScaleButton) {
+    const menu = copyScaleButton.closest(".action-menu");
+    if (menu) menu.open = false;
     if (!navigator.clipboard) {
       toast("Safari no permitió copiar automáticamente");
       return;

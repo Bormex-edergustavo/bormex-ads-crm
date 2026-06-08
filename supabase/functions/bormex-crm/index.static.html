@@ -478,6 +478,44 @@ h2 {
   flex-wrap: wrap;
 }
 
+.action-menu {
+  position: relative;
+  width: max-content;
+}
+
+.action-menu summary {
+  list-style: none;
+}
+
+.action-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.action-menu-trigger::after {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+}
+
+.action-menu[open] .action-menu-trigger::after {
+  transform: rotate(180deg);
+}
+
+.action-menu-panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(76px, 1fr));
+  gap: 6px;
+  margin-top: 7px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: var(--radius);
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.12);
+}
+
 .primary-button,
 .secondary-button,
 .ghost-button,
@@ -543,7 +581,8 @@ h2 {
   padding: 0 11px;
 }
 
-.scale-actions .compact {
+.scale-actions .compact,
+.action-menu-panel .compact {
   margin-top: 0;
   min-height: 28px;
   padding: 0 9px;
@@ -3355,13 +3394,16 @@ function renderRecommendationAction(row) {
     <div class="scale-action">
       ${badge}
       ${increasePlan.actionable ? `<small>${money.format(increasePlan.currentBudget)}/día · paso ${numberFormat.format(increasePlan.percent)}%</small>` : `<small>${escapeHtml(increasePlan.reason)}</small>`}
-      <div class="scale-actions">
-        ${increasePlan.actionable ? `<button class="secondary-button compact" type="button" data-meta-adset-action="increase_budget" data-adset-id="${escapeHtml(row.adsetId)}" data-target-budget="${increasePlan.suggestedBudget}" data-current-budget="${increasePlan.currentBudget}" data-ad-name="${escapeHtml(row.ad)}">Subir</button>` : ""}
-        ${decreasePlan.actionable ? `<button class="ghost-button compact" type="button" data-meta-adset-action="decrease_budget" data-adset-id="${escapeHtml(row.adsetId)}" data-target-budget="${decreasePlan.suggestedBudget}" data-current-budget="${decreasePlan.currentBudget}" data-ad-name="${escapeHtml(row.ad)}">Bajar</button>` : ""}
-        <button class="${statusClass} compact" type="button" data-meta-adset-action="${statusAction}" data-adset-id="${escapeHtml(row.adsetId)}" data-ad-name="${escapeHtml(row.ad)}">${statusLabel}</button>
-        <a class="secondary-button compact" href="${escapeHtml(adsManagerAdsetUrl(row.adsetId))}" target="_blank" rel="noopener noreferrer">Meta</a>
-        ${copy ? `<button class="ghost-button compact" type="button" data-copy-scale-plan="${escapeHtml(copy)}">Copiar</button>` : ""}
-      </div>
+      <details class="action-menu">
+        <summary class="secondary-button compact action-menu-trigger">Acciones</summary>
+        <div class="action-menu-panel">
+          ${increasePlan.actionable ? `<button class="secondary-button compact" type="button" data-meta-adset-action="increase_budget" data-adset-id="${escapeHtml(row.adsetId)}" data-target-budget="${increasePlan.suggestedBudget}" data-current-budget="${increasePlan.currentBudget}" data-ad-name="${escapeHtml(row.ad)}">Subir</button>` : ""}
+          ${decreasePlan.actionable ? `<button class="ghost-button compact" type="button" data-meta-adset-action="decrease_budget" data-adset-id="${escapeHtml(row.adsetId)}" data-target-budget="${decreasePlan.suggestedBudget}" data-current-budget="${decreasePlan.currentBudget}" data-ad-name="${escapeHtml(row.ad)}">Bajar</button>` : ""}
+          <button class="${statusClass} compact" type="button" data-meta-adset-action="${statusAction}" data-adset-id="${escapeHtml(row.adsetId)}" data-ad-name="${escapeHtml(row.ad)}">${statusLabel}</button>
+          <a class="secondary-button compact" href="${escapeHtml(adsManagerAdsetUrl(row.adsetId))}" target="_blank" rel="noopener noreferrer">Meta</a>
+          ${copy ? `<button class="ghost-button compact" type="button" data-copy-scale-plan="${escapeHtml(copy)}">Copiar</button>` : ""}
+        </div>
+      </details>
     </div>
   `;
 }
@@ -4757,15 +4799,31 @@ document.getElementById("statusFilter").addEventListener("change", renderPerform
 document.getElementById("syncAds").addEventListener("click", syncAdsFromMeta);
 document.getElementById("refreshMetaSetup").addEventListener("click", refreshMetaSetup);
 
+document.addEventListener(
+  "toggle",
+  (event) => {
+    const menu = event.target.closest?.(".action-menu");
+    if (!menu?.open) return;
+    document.querySelectorAll(".action-menu[open]").forEach((item) => {
+      if (item !== menu) item.open = false;
+    });
+  },
+  true,
+);
+
 document.addEventListener("click", (event) => {
   const metaActionButton = event.target.closest("[data-meta-adset-action]");
   if (metaActionButton) {
+    const menu = metaActionButton.closest(".action-menu");
+    if (menu) menu.open = false;
     handleMetaAdsetAction(metaActionButton);
     return;
   }
 
   const copyScaleButton = event.target.closest("[data-copy-scale-plan]");
   if (copyScaleButton) {
+    const menu = copyScaleButton.closest(".action-menu");
+    if (menu) menu.open = false;
     if (!navigator.clipboard) {
       toast("Safari no permitió copiar automáticamente");
       return;
