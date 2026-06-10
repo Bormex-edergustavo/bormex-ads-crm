@@ -4287,9 +4287,9 @@ async function saveSale(sale, message) {
     toast(message);
     return true;
   } catch (error) {
-    if (isMetaQuotaError(error) && (await confirmRemoteSaleSaved(sale))) {
+    if (isMetaQuotaError(error) && (await recoverSaleSaveAfterMetaQuota(sale))) {
       render();
-      toast("Venta registrada. Meta Ads sigue sin cuota, pero no bloqueó el guardado.");
+      toast("Venta registrada. Meta Ads sigue sin cuota, pero no bloqueó la venta.");
       return true;
     }
     toast(`No se guardó la venta: ${formatActionError(error)}`);
@@ -4300,21 +4300,46 @@ async function saveSale(sale, message) {
 function formatActionError(error) {
   const message = String(error?.message || "intenta de nuevo");
   if (isMetaQuotaError(error)) {
-    return "Meta Ads agotó su cuota. Revisa el historial: si aparece ahí, la venta sí quedó guardada.";
+    return "Meta Ads agotó su cuota. La venta no depende de Meta; recarga y revisa el historial antes de capturarla otra vez.";
   }
   return message;
 }
 
+async function recoverSaleSaveAfterMetaQuota(sale) {
+  if (await confirmRemoteSaleSaved(sale)) return true;
+  try {
+    const remoteState = await api("/api/sales", { method: "POST", body: JSON.stringify(sale) });
+    applyRemoteState(remoteState);
+    return saleExistsInState(sale);
+  } catch {
+    return confirmRemoteSaleSaved(sale);
+  }
+}
+
 async function confirmRemoteSaleSaved(sale) {
-  if (!serverAvailable || !sale?.id) return false;
+  if (!serverAvailable || !sale) return false;
   try {
     const remoteState = await api("/api/state");
     mergeRemoteState(remoteState);
     saveState();
-    return (state.sales || []).some((item) => item.id === sale.id);
+    return saleExistsInState(sale);
   } catch {
     return false;
   }
+}
+
+function saleExistsInState(sale) {
+  return (state.sales || []).some((item) => saleMatches(item, sale));
+}
+
+function saleMatches(item, sale) {
+  if (sale.id && item.id === sale.id) return true;
+  const samePhone = normalizePhone(item.phone) === normalizePhone(sale.phone);
+  const sameDate = String(item.date || "") === String(sale.date || "");
+  const sameAmount = Number(item.amount || 0) === Number(sale.amount || 0);
+  const sameProducts = getSaleProducts(item).join("|") === getSaleProducts(sale).join("|");
+  const sameAd = normalizeAdId(item.adId) === normalizeAdId(sale.adId);
+  return samePhone && sameDate && sameAmount && sameProducts && sameAd;
 }
 
 function isMetaQuotaError(error) {
