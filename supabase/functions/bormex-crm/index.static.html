@@ -2446,6 +2446,10 @@ function saveState() {
   })}`;
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function api(path, options = {}) {
   const headers = {
     "content-type": "application/json",
@@ -4224,6 +4228,13 @@ async function handleSaleSubmit(event) {
   } else {
     applyKnownSaleAttribution(sale);
   }
+  if (saleExistsInState(sale)) {
+    render();
+    toast("Venta registrada. Ya estaba guardada en el historial.");
+    form.reset();
+    form.elements.date.value = today();
+    return;
+  }
   const submitButton = form.querySelector('button[type="submit"]');
   const originalButtonText = submitButton?.textContent || "Guardar venta";
   try {
@@ -4292,7 +4303,8 @@ async function saveSale(sale, message) {
       toast("Venta registrada. Meta Ads sigue sin cuota, pero no bloqueó la venta.");
       return true;
     }
-    toast(`No se guardó la venta: ${formatActionError(error)}`);
+    if (isMetaQuotaError(error)) toast(formatActionError(error));
+    else toast(`No se guardó la venta: ${formatActionError(error)}`);
     return false;
   }
 }
@@ -4300,36 +4312,47 @@ async function saveSale(sale, message) {
 function formatActionError(error) {
   const message = String(error?.message || "intenta de nuevo");
   if (isMetaQuotaError(error)) {
-    return "Meta Ads agotó su cuota. La venta no depende de Meta; recarga y revisa el historial antes de capturarla otra vez.";
+    return "Meta Ads agotó su cuota. Revisé el servidor y no pude confirmar la venta; recarga y revisa el historial antes de capturarla otra vez.";
   }
   return message;
 }
 
 async function recoverSaleSaveAfterMetaQuota(sale) {
-  if (await confirmRemoteSaleSaved(sale)) return true;
+  if (await confirmRemoteSaleSaved(sale, { attempts: 5, delayMs: 350 })) return true;
   try {
     const remoteState = await api("/api/sales", { method: "POST", body: JSON.stringify(sale) });
     applyRemoteState(remoteState);
     return saleExistsInState(sale);
   } catch {
-    return confirmRemoteSaleSaved(sale);
+    return confirmRemoteSaleSaved(sale, { attempts: 4, delayMs: 650 });
   }
 }
 
-async function confirmRemoteSaleSaved(sale) {
-  if (!serverAvailable || !sale) return false;
-  try {
-    const remoteState = await api("/api/state");
-    mergeRemoteState(remoteState);
-    saveState();
-    return saleExistsInState(sale);
-  } catch {
-    return false;
+async function confirmRemoteSaleSaved(sale, options = {}) {
+  if (!sale) return false;
+  const attempts = Math.max(1, Number(options.attempts || 3));
+  const delayMs = Math.max(0, Number(options.delayMs || 400));
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) await wait(delayMs * attempt);
+    try {
+      const remoteState = await api("/api/state");
+      serverAvailable = true;
+      mergeRemoteState(remoteState);
+      saveState();
+      if (saleExistsInState(sale)) return true;
+    } catch {
+      // Meta quota errors can arrive after the sale write; retry the read before giving up.
+    }
   }
+  return false;
 }
 
 function saleExistsInState(sale) {
-  return (state.sales || []).some((item) => saleMatches(item, sale));
+  return Boolean(findMatchingSale(sale));
+}
+
+function findMatchingSale(sale) {
+  return (state.sales || []).find((item) => saleMatches(item, sale));
 }
 
 function saleMatches(item, sale) {
@@ -4338,7 +4361,9 @@ function saleMatches(item, sale) {
   const sameDate = String(item.date || "") === String(sale.date || "");
   const sameAmount = Number(item.amount || 0) === Number(sale.amount || 0);
   const sameProducts = getSaleProducts(item).join("|") === getSaleProducts(sale).join("|");
-  const sameAd = normalizeAdId(item.adId) === normalizeAdId(sale.adId);
+  const itemAd = normalizeAdId(item.adId);
+  const saleAd = normalizeAdId(sale.adId);
+  const sameAd = !itemAd || !saleAd || itemAd === saleAd;
   return samePhone && sameDate && sameAmount && sameProducts && sameAd;
 }
 
