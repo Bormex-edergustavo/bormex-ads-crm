@@ -587,8 +587,25 @@ function findAdById(adIdValue) {
   );
 }
 
+function findMetaAdById(adIdValue) {
+  const adId = normalizeAdId(adIdValue);
+  if (!adId) return null;
+  return (
+    (state.rangeAds || []).find((ad) => normalizeAdId(ad.id) === adId || normalizeAdId(ad.adId) === adId) ||
+    (state.ads || []).find((ad) => normalizeAdId(ad.id) === adId || normalizeAdId(ad.adId) === adId) ||
+    null
+  );
+}
+
 function adName(record) {
   return record?.name || record?.ad || "";
+}
+
+function performanceIdentity(row) {
+  const metaAd = findMetaAdById(row.adId);
+  const ad = metaAd?.name || row.name || row.ad || row.adId || "Sin anuncio";
+  const campaign = metaAd?.campaign || row.campaign || "Sin campaña";
+  return { ad, campaign };
 }
 
 function ensureDateFilters() {
@@ -720,12 +737,13 @@ function getSaleAttribution(sale) {
   const saleAdId = isPhoneUsedAsAdId(saleAdIdInput, sale.phone) ? "" : normalizeAdId(saleAdIdInput);
   if (saleAdId) {
     const matchedAd = findAdById(saleAdId);
+    const metaAd = findMetaAdById(saleAdId) || matchedAd;
     return {
       source: "manual_ad_id",
-      campaign: sale.campaign || matchedAd?.campaign || "ID manual",
-      campaignId: sale.campaignId || matchedAd?.campaignId || "",
-      adset: sale.adset || matchedAd?.adset || "",
-      ad: sale.ad || adName(matchedAd) || `Anuncio ${saleAdId}`,
+      campaign: metaAd?.campaign || sale.campaign || "ID manual",
+      campaignId: metaAd?.campaignId || sale.campaignId || "",
+      adset: metaAd?.adset || sale.adset || "",
+      ad: adName(metaAd) || sale.ad || `Anuncio ${saleAdId}`,
       adId: saleAdId,
     };
   }
@@ -755,12 +773,13 @@ function extractStoredAttribution(record, source = "stored") {
   );
   if (!hasAttribution) return null;
   const matchedAd = findAdById(adId);
+  const metaAd = findMetaAdById(adId) || matchedAd;
   return {
     source: record.attributionSource || source,
-    campaign: record.campaign || matchedAd?.campaign || "",
-    campaignId: record.campaignId || matchedAd?.campaignId || "",
-    adset: record.adset || matchedAd?.adset || "",
-    ad: record.ad || adName(matchedAd) || adId || "",
+    campaign: metaAd?.campaign || record.campaign || "",
+    campaignId: metaAd?.campaignId || record.campaignId || "",
+    adset: metaAd?.adset || record.adset || "",
+    ad: adName(metaAd) || record.ad || adId || "",
     adId,
     ctwaClid: record.ctwaClid || "",
     sourceUrl: record.sourceUrl || "",
@@ -993,8 +1012,11 @@ function getPerformance() {
     const cpa = row.sales > 0 ? row.spend / row.sales : 0;
     const roas = row.spend > 0 ? row.revenue / row.spend : 0;
     const costPerMessage = row.messages > 0 ? row.spend / row.messages : 0;
+    const identity = performanceIdentity(row);
     return {
       ...row,
+      ad: identity.ad,
+      campaign: identity.campaign,
       cpa,
       roas,
       costPerMessage,
@@ -1257,8 +1279,8 @@ function renderPerformance() {
     .map(
       (row) => `
         <tr>
-          <td>${escapeHtml(row.ad)}</td>
-          <td>${escapeHtml(row.campaign)}</td>
+          <td class="identity-cell" title="${escapeHtml(row.ad)}"><span class="identity-text">${escapeHtml(row.ad)}</span></td>
+          <td class="identity-cell" title="${escapeHtml(row.campaign)}"><span class="identity-text">${escapeHtml(row.campaign)}</span></td>
           <td>${money.format(row.spend)}</td>
           <td>${numberFormat.format(row.messages || 0)}</td>
           <td>${row.sales}</td>

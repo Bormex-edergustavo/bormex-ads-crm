@@ -783,6 +783,23 @@ table {
   border-spacing: 0;
 }
 
+.performance-table {
+  min-width: 1180px;
+  table-layout: fixed;
+}
+
+.performance-table th:nth-child(1),
+.performance-table td:nth-child(1),
+.performance-table th:nth-child(2),
+.performance-table td:nth-child(2) {
+  width: 220px;
+}
+
+.performance-table th:nth-child(10),
+.performance-table td:nth-child(10) {
+  width: 170px;
+}
+
 th,
 td {
   border-bottom: 1px solid rgba(148, 163, 184, 0.22);
@@ -809,6 +826,18 @@ td {
   color: #1f2937;
   font-size: 14px;
   font-weight: 650;
+}
+
+.identity-cell {
+  white-space: normal;
+}
+
+.identity-text {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.25;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 tbody tr {
