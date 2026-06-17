@@ -1248,10 +1248,11 @@ function renderAdIdOptions() {
 
 function renderMetrics() {
   const performance = getPerformance();
+  const filteredSales = getFilteredSales();
   const spend = performance.reduce((sum, item) => sum + item.spend, 0);
   const messages = performance.reduce((sum, item) => sum + Number(item.messages || 0), 0);
-  const revenue = performance.reduce((sum, item) => sum + Number(item.revenue || 0), 0);
-  const sales = performance.reduce((sum, item) => sum + Number(item.sales || 0), 0);
+  const revenue = filteredSales.reduce((sum, sale) => sum + Number(sale.amount || 0), 0);
+  const sales = filteredSales.length;
   const cpa = sales ? spend / sales : 0;
   const roas = spend ? revenue / spend : 0;
   const costPerMessage = messages ? spend / messages : 0;
