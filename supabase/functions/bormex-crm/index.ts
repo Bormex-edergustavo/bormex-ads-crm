@@ -217,9 +217,10 @@ Deno.serve(async (req) => {
       await upsertItems("leads", payload.leads);
       await upsertItems("conversations", payload.conversations);
       await upsertItems("messages", payload.messages);
-      await rememberWebhookEvent("whatsapp", body, payload);
+      const metaCapi = await sendWhatsAppLeadsToMetaCapi(body);
+      await rememberWebhookEvent("whatsapp", body, { ...payload, metaCapi });
       await setSetting("lastWebhookAt", new Date().toISOString());
-      return json({ ok: true, leads: payload.leads.length, messages: payload.messages.length });
+      return json({ ok: true, leads: payload.leads.length, messages: payload.messages.length, metaCapi });
     }
 
     if (pathname === "/webhooks/meta" && req.method === "GET") {
@@ -280,6 +281,7 @@ function configPayload(role = "") {
   const whatsappSendTokenConfigured = Boolean(whatsappSendAccessToken());
   return {
     metaAdsConfigured: Boolean(metaAdsAccessToken() && Deno.env.get("META_AD_ACCOUNT_ID")),
+    metaCapiConfigured: Boolean(metaPixelId() && metaCapiAccessToken()),
     whatsappWebhookConfigured: Boolean(metaWebhookVerifyToken()),
     whatsappPhoneConfigured: Boolean(Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappApiConfigured: Boolean(whatsappSendTokenConfigured && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
@@ -1808,7 +1810,7 @@ async function safeGraphPost(path: string, token: string, params: Record<string,
   }
 }
 
-async function safeGraphPostJson(path: string, token: string, body: Record<string, string>) {
+async function safeGraphPostJson(path: string, token: string, body: Record<string, unknown>) {
   try {
     const payload = await graphJsonRequest(path, token, "POST", body);
     return { ok: true, payload };
@@ -1828,7 +1830,7 @@ async function graphRequest(path: string, token: string, method: "GET" | "POST",
   return payload;
 }
 
-async function graphJsonRequest(path: string, token: string, method: "POST", body: Record<string, string>) {
+async function graphJsonRequest(path: string, token: string, method: "POST", body: Record<string, unknown>) {
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
   const url = new URL(`https://graph.facebook.com/${graphVersion()}${cleanPath}`);
   url.searchParams.set("access_token", token);
@@ -1976,6 +1978,115 @@ function extractWhatsAppEvents(payload: any) {
     }
   }
   return { leads, conversations, messages };
+}
+
+async function sendWhatsAppLeadsToMetaCapi(payload: any) {
+  const events = await buildWhatsAppLeadCapiEvents(payload);
+  if (!events.length) {
+    return { ok: true, skipped: true, reason: "no_real_inbound_messages", events: 0 };
+  }
+
+  const pixelId = metaPixelId();
+  const token = metaCapiAccessToken();
+  if (!pixelId || !token) {
+    return { ok: false, skipped: true, reason: "missing_meta_capi_config", events: events.length };
+  }
+
+  try {
+    const body: Record<string, unknown> = { data: events };
+    const testEventCode = Deno.env.get("META_CAPI_TEST_EVENT_CODE") || Deno.env.get("META_TEST_EVENT_CODE") || "";
+    if (testEventCode) body.test_event_code = testEventCode;
+    const result = await graphJsonRequest(`/${pixelId}/events`, token, "POST", body);
+    return {
+      ok: true,
+      events: events.length,
+      eventsReceived: Number(result.events_received || 0),
+      fbtraceId: String(result.fbtrace_id || ""),
+    };
+  } catch (error) {
+    console.error("Meta CAPI Lead error", error instanceof Error ? error.message : error);
+    return {
+      ok: false,
+      events: events.length,
+      error: error instanceof Error ? error.message : "Meta CAPI no respondio",
+    };
+  }
+}
+
+async function buildWhatsAppLeadCapiEvents(payload: any) {
+  const events = [];
+  const siteUrl = Deno.env.get("BORMEX_SITE_URL") || Deno.env.get("PUBLIC_SITE_URL") || "https://bormex-souvenirs-web.vercel.app/";
+  const eventName = Deno.env.get("META_CAPI_EVENT_NAME") || "Lead";
+  const actionSource = Deno.env.get("META_CAPI_ACTION_SOURCE") || "website";
+  const oldestAllowed = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
+
+  for (const entry of payload.entry || []) {
+    for (const change of entry.changes || []) {
+      const field = String(change.field || "messages");
+      if (!field.toLowerCase().includes("messages")) continue;
+      const value = change.value || {};
+      const businessPhone = normalizePhone(value.metadata?.display_phone_number || Deno.env.get("WHATSAPP_DISPLAY_PHONE_NUMBER") || "");
+      const messages = Array.isArray(value.messages) ? value.messages.filter(looksLikeWhatsAppMessage) : [];
+      for (const message of messages) {
+        const fromPhone = normalizePhone(message.from || message.sender?.wa_id || message.sender?.id || "");
+        const toPhone = normalizePhone(message.to || message.recipient_id || message.recipient?.wa_id || message.recipient?.id || "");
+        if (isWhatsAppEcho(message, field, fromPhone, businessPhone)) continue;
+        const phone = fromPhone || toPhone;
+        if (!phone) continue;
+
+        const timestamp = Number(message.timestamp || 0);
+        const eventTime = Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Math.floor(Date.now() / 1000);
+        if (eventTime < oldestAllowed) continue;
+
+        const referral = message.referral || message.context?.referral || {};
+        const attribution = normalizeReferralAttribution(referral, "whatsapp_referral");
+        const phoneHash = await sha256Hex(phone);
+        const externalId = await sha256Hex(`whatsapp:${phone}`);
+        const messageId = String(message.id || `${phone}_${message.timestamp || Date.now()}`);
+        events.push({
+          event_name: eventName,
+          event_time: eventTime,
+          event_id: `whatsapp_lead_${messageId}`,
+          action_source: actionSource,
+          event_source_url: String(referral.source_url || siteUrl),
+          user_data: {
+            ph: [phoneHash],
+            external_id: [externalId],
+          },
+          custom_data: compactMetaCapiData({
+            content_name: "WhatsApp real enviado",
+            content_category: "BORMEX cotizacion",
+            messaging_channel: "whatsapp",
+            message_type: message.type || "unknown",
+            business_phone_number_id: value.metadata?.phone_number_id,
+            business_display_phone_number: value.metadata?.display_phone_number,
+            referral_source_id: referral.source_id,
+            referral_source_url: referral.source_url,
+            referral_headline: referral.headline,
+            ad_id: attribution.adId || normalizeAdId(referral.source_id || ""),
+            ad_name: attribution.ad,
+            adset_name: attribution.adset,
+            campaign_name: attribution.campaign,
+            ctwa_clid: attribution.ctwaClid || referral.ctwa_clid,
+          }),
+        });
+      }
+    }
+  }
+
+  return events;
+}
+
+function compactMetaCapiData(data: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(data).filter(([, value]) => value !== undefined && value !== null && value !== ""),
+  );
+}
+
+async function sha256Hex(value: string) {
+  const encoded = new TextEncoder().encode(String(value || "").trim().toLowerCase());
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function getWhatsAppContactSyncItems(value: any) {
@@ -2506,6 +2617,14 @@ function metaAdsAccessToken() {
   return Deno.env.get("META_ADS_ACCESS_TOKEN") || Deno.env.get("META_ACCESS_TOKEN") || "";
 }
 
+function metaCapiAccessToken() {
+  return Deno.env.get("META_CAPI_ACCESS_TOKEN") || metaAdsAccessToken();
+}
+
+function metaPixelId() {
+  return Deno.env.get("META_PIXEL_ID") || Deno.env.get("META_DATASET_ID") || "1150202023932183";
+}
+
 function whatsappAccessToken() {
   return Deno.env.get("WHATSAPP_ACCESS_TOKEN") || Deno.env.get("META_ACCESS_TOKEN") || "";
 }
@@ -2542,7 +2661,11 @@ function maskValue(value: string) {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
-async function rememberWebhookEvent(source: string, body: any, parsed: { leads?: unknown[]; messages?: unknown[]; conversations?: unknown[] }) {
+async function rememberWebhookEvent(
+  source: string,
+  body: any,
+  parsed: { leads?: unknown[]; messages?: unknown[]; conversations?: unknown[]; metaCapi?: unknown },
+) {
   const settings = await readSettings();
   const entry = {
     id: crypto.randomUUID(),
@@ -2554,6 +2677,7 @@ async function rememberWebhookEvent(source: string, body: any, parsed: { leads?:
     leads: parsed.leads?.length || 0,
     messages: parsed.messages?.length || 0,
     conversations: parsed.conversations?.length || 0,
+    metaCapi: parsed.metaCapi || null,
     sample: summarizeWebhookPayload(body),
   };
   const previous = Array.isArray(settings.webhookEvents) ? settings.webhookEvents : [];
