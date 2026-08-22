@@ -1,4 +1,22 @@
-const defaultDb = {
+type DbState = {
+  conversations: any[];
+  messages: any[];
+  sales: any[];
+  leads: any[];
+  spend: any[];
+  ads: any[];
+  crmTags: any[];
+  campaignPeriods: any[];
+  rules: { targetCpa: number; minRoas: number; minLeads: number };
+  webhookEvents: any[];
+  lastCoexistenceSync: any;
+  lastAdsSync: any;
+  lastAdsRange: any;
+  lastWebhookAt: any;
+  [key: string]: any;
+};
+
+const defaultDb: DbState = {
   conversations: [],
   messages: [],
   sales: [],
@@ -33,6 +51,14 @@ const tableMap = {
 } as const;
 
 const ADS_RANGE_CACHE_LIMIT = 16;
+const META_BUYER_AUDIENCE_NAME = "BORMEX | Compradores CRM";
+const META_BUYER_AUDIENCE_SETTING = "metaBuyerAudience";
+const META_BUYER_SYNC_SETTING = "metaBuyerAudienceSync";
+const META_PURCHASE_SETTING_PREFIX = "metaPurchase:";
+const META_PURCHASE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
+const COMPACT_CONVERSATION_LIMIT = 300;
+const CONVERSATION_MESSAGE_LIMIT = 200;
+const CONVERSATION_SEARCH_LIMIT = 100;
 
 type Collection = keyof typeof tableMap;
 
@@ -66,7 +92,10 @@ Deno.serve(async (req) => {
     }
 
     if (pathname === "/api/state" && req.method === "GET") {
-      return json(filterStateForRole(await readDb(), accessRole));
+      const compact = url.searchParams.get("compact") === "1";
+      const since = compact ? normalizeSyncCursor(url.searchParams.get("since")) : "";
+      const db = compact ? await readCompactDb(accessRole, since) : await readDb();
+      return json(filterStateForRole(db, accessRole));
     }
 
     if (pathname === "/api/debug/parse-whatsapp" && req.method === "POST") {
@@ -85,6 +114,19 @@ Deno.serve(async (req) => {
       return json(await getMetaCoexistenceSetup(url));
     }
 
+    if (pathname === "/api/meta/buyers/status" && req.method === "GET") {
+      return json(await getMetaBuyerStatus());
+    }
+
+    if (pathname === "/api/meta/buyers/sync" && req.method === "POST") {
+      const body = await readJson(req);
+      const audience = await syncBuyerAudience({ force: body.force !== false });
+      const purchases = body.backfillPurchases === false
+        ? { ok: true, skipped: true, reason: "backfill_disabled" }
+        : await syncEligiblePurchaseEvents();
+      return json({ ok: audience.ok && purchases.ok, audience, purchases });
+    }
+
     if (pathname === "/api/meta/subscribe" && req.method === "POST") {
       return json(await subscribeMetaWebhooks(url));
     }
@@ -99,6 +141,24 @@ Deno.serve(async (req) => {
 
     if (pathname === "/api/ads-range" && req.method === "POST") {
       return json(await syncMetaAdsRange(await readJson(req)));
+    }
+
+    if (pathname === "/api/conversations/search" && req.method === "GET") {
+      const query = String(url.searchParams.get("query") || "").trim();
+      const limit = clampInteger(url.searchParams.get("limit"), 1, CONVERSATION_SEARCH_LIMIT, CONVERSATION_SEARCH_LIMIT);
+      return json({
+        partial: true,
+        compact: true,
+        conversations: await searchConversations(query, limit),
+      });
+    }
+
+    const conversationMessagesMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/messages$/);
+    if (conversationMessagesMatch && req.method === "GET") {
+      const conversationId = decodeURIComponent(conversationMessagesMatch[1]);
+      const limit = clampInteger(url.searchParams.get("limit"), 1, CONVERSATION_MESSAGE_LIMIT, CONVERSATION_MESSAGE_LIMIT);
+      const before = normalizeSyncCursor(url.searchParams.get("before"));
+      return json(await readConversationMessages(conversationId, { limit, before }));
     }
 
     if (pathname === "/api/messages" && req.method === "POST") {
@@ -123,13 +183,16 @@ Deno.serve(async (req) => {
     }
 
     if (pathname.startsWith("/api/conversations/") && req.method === "POST") {
-      await updateConversation(decodeURIComponent(pathname.replace("/api/conversations/", "")), await readJson(req));
-      return json(filterStateForRole(await readDb(), accessRole));
+      const conversation = await updateConversation(
+        decodeURIComponent(pathname.replace("/api/conversations/", "")),
+        await readJson(req),
+      );
+      return json({ partial: true, conversations: [conversation] });
     }
 
     if (pathname === "/api/crm-tags" && req.method === "POST") {
-      await saveCrmTag(await readJson(req));
-      return json(filterStateForRole(await readDb(), accessRole));
+      const crmTags = await saveCrmTag(await readJson(req));
+      return json({ partial: true, crmTags });
     }
 
     if (pathname === "/api/followups/run" && req.method === "POST") {
@@ -143,7 +206,13 @@ Deno.serve(async (req) => {
       if (isSingleDayRange(payload.range)) await upsertItems("spend", payload.spend);
       await setSetting("lastAdsSync", new Date().toISOString());
       await setSetting("lastAdsRange", payload.range);
-      return json(await readDb());
+      return json({
+        partial: true,
+        ads: payload.ads,
+        spend: isSingleDayRange(payload.range) ? payload.spend : [],
+        lastAdsSync: new Date().toISOString(),
+        lastAdsRange: payload.range,
+      });
     }
 
     if (pathname === "/api/cron/sync" && req.method === "POST") {
@@ -157,7 +226,19 @@ Deno.serve(async (req) => {
       if (isSingleDayRange(payload.range)) await upsertItems("spend", payload.spend);
       await setSetting("lastAdsSync", new Date().toISOString());
       await setSetting("lastAdsRange", payload.range);
-      return json({ ok: true, ads: payload.ads.length });
+      const buyers = await syncBuyerAudience({ force: false });
+      const purchases = await syncEligiblePurchaseEvents();
+      return json({ ok: true, ads: payload.ads.length, buyers, purchases });
+    }
+
+    if (pathname === "/api/cron/meta-buyers" && req.method === "POST") {
+      const secret = url.searchParams.get("secret") || req.headers.get("x-cron-secret") || "";
+      if (!Deno.env.get("CRON_SECRET") || secret !== Deno.env.get("CRON_SECRET")) {
+        return text("Forbidden", 403);
+      }
+      const audience = await syncBuyerAudience({ force: false });
+      const purchases = await syncEligiblePurchaseEvents();
+      return json({ ok: audience.ok && purchases.ok, audience, purchases });
     }
 
     if (pathname === "/api/cron/followups" && req.method === "POST") {
@@ -169,42 +250,69 @@ Deno.serve(async (req) => {
     }
 
     if (pathname === "/api/sales" && req.method === "POST") {
-      const sale = await enrichSaleAttribution(normalizeSale(await readJson(req)));
+      const normalized = normalizeSale(await readJson(req));
+      const existingSale = await readItemById("sales", String(normalized.id || ""));
+      const sale = await enrichSaleAttribution({
+        ...normalized,
+        confirmedAt: normalized.confirmedAt || existingSale?.confirmedAt || new Date().toISOString(),
+      });
       await upsertItems("sales", [sale]);
-      return json(filterStateForRole(await readDb(), accessRole));
+      await syncConfirmedSaleToMeta(sale);
+      return json({ partial: true, sales: [sale] });
     }
 
     if (pathname.startsWith("/api/sales/") && req.method === "DELETE") {
-      await deleteItem("sales", decodeURIComponent(pathname.replace("/api/sales/", "")));
-      return json(filterStateForRole(await readDb(), accessRole));
+      const id = decodeURIComponent(pathname.replace("/api/sales/", ""));
+      const deletedSale = await readItemById("sales", id);
+      await deleteItem("sales", id);
+      if (deletedSale?.phone) await removeBuyerFromAudienceIfUnused(String(deletedSale.phone));
+      return json({ partial: true, deleted: { collection: "sales", id } });
     }
 
     if (pathname === "/api/rules" && req.method === "POST") {
-      await setSetting("rules", normalizeRules(await readJson(req)));
-      return json(await readDb());
+      const rules = normalizeRules(await readJson(req));
+      await setSetting("rules", rules);
+      return json({ partial: true, rules });
     }
 
     if (pathname === "/api/campaign-periods" && req.method === "POST") {
       const body = await readJson(req);
       const periods = Array.isArray(body.periods) ? body.periods.map(normalizeCampaignPeriod) : [];
       await setSetting("campaignPeriods", periods);
-      return json(await readDb());
+      return json({ partial: true, campaignPeriods: periods });
     }
 
     if (pathname === "/api/import" && req.method === "POST") {
       const body = await readJson(req);
       const rows = Array.isArray(body.rows) ? body.rows : [];
-      if (body.type === "sales") await upsertItems("sales", rows.map(normalizeSale));
-      if (body.type === "leads") await upsertItems("leads", rows.map(normalizeLead));
-      if (body.type === "spend") await upsertItems("spend", rows.map(normalizeSpend));
-      return json(await readDb());
+      let imported: Array<Record<string, unknown>> = [];
+      if (body.type === "sales") {
+        imported = rows.map(normalizeSale);
+        await upsertItems("sales", imported);
+        await syncBuyerAudience({ force: false });
+        await syncEligiblePurchaseEvents();
+      }
+      if (body.type === "leads") {
+        imported = rows.map(normalizeLead);
+        await upsertItems("leads", imported);
+      }
+      if (body.type === "spend") {
+        imported = rows.map(normalizeSpend);
+        await upsertItems("spend", imported);
+      }
+      return json({ partial: true, [String(body.type || "")]: imported });
     }
 
     if (pathname.startsWith("/api/records/") && req.method === "DELETE") {
       const [, , , collection, rawId] = pathname.split("/");
       if (!["sales", "leads", "spend"].includes(collection)) return text("Not found", 404);
-      await deleteItem(collection as Collection, decodeURIComponent(rawId || ""));
-      return json(filterStateForRole(await readDb(), accessRole));
+      const id = decodeURIComponent(rawId || "");
+      const deletedSale = collection === "sales"
+        ? await readItemById("sales", id)
+        : null;
+      await deleteItem(collection as Collection, id);
+      if (deletedSale?.phone) await removeBuyerFromAudienceIfUnused(String(deletedSale.phone));
+      return json({ partial: true, deleted: { collection, id } });
     }
 
     if (pathname === "/webhooks/whatsapp" && req.method === "GET") {
@@ -307,7 +415,17 @@ function configPayload(role = "") {
 }
 
 function isPublicPath(pathname: string) {
-  return ["/", "/index.html", "/health", "/webhooks/whatsapp", "/webhooks/meta", "/api/cron/sync", "/api/cron/followups", "/oauth/meta"].includes(pathname);
+  return [
+    "/",
+    "/index.html",
+    "/health",
+    "/webhooks/whatsapp",
+    "/webhooks/meta",
+    "/api/cron/sync",
+    "/api/cron/followups",
+    "/api/cron/meta-buyers",
+    "/oauth/meta",
+  ].includes(pathname);
 }
 
 function getAccessRole(req: Request, pathname = "") {
@@ -341,6 +459,8 @@ function isPathAllowed(pathname: string, method: string, role: string) {
   if (role !== "sales") return false;
   if (method === "GET" && ["/", "/index.html", "/styles.css", "/app.js", "/privacy.html"].includes(pathname)) return true;
   if (method === "GET" && ["/api/config", "/api/state"].includes(pathname)) return true;
+  if (method === "GET" && pathname === "/api/conversations/search") return true;
+  if (method === "GET" && /^\/api\/conversations\/[^/]+\/messages$/.test(pathname)) return true;
   if (method === "GET" && pathname.startsWith("/api/media/whatsapp/")) return true;
   if (method === "POST" && pathname === "/api/messages") return true;
   if (method === "POST" && pathname === "/api/media/whatsapp") return true;
@@ -353,10 +473,13 @@ function isPathAllowed(pathname: string, method: string, role: string) {
   return false;
 }
 
-function filterStateForRole(db: typeof defaultDb, role: string) {
+function filterStateForRole(db: any, role: string) {
   if (role !== "sales") return db;
   return {
     ...structuredClone(defaultDb),
+    compact: Boolean(db.compact),
+    partial: Boolean(db.partial),
+    serverTime: db.serverTime || null,
     conversations: db.conversations || [],
     messages: db.messages || [],
     sales: db.sales || [],
@@ -409,6 +532,45 @@ async function readDb() {
   };
 }
 
+async function readCompactDb(role: string, since = "") {
+  const serverTime = new Date().toISOString();
+  const partial = Boolean(since);
+  const readChanged = (collection: Collection) => partial
+    ? readCollectionUpdatedSince(collection, since)
+    : readCollection(collection);
+  const conversationsPromise = partial
+    ? readCollectionUpdatedSince("conversations", since)
+    : readRecentCollection("conversations", COMPACT_CONVERSATION_LIMIT);
+  const [conversations, sales, leads, spend, ads, settings] = await Promise.all([
+    conversationsPromise,
+    readChanged("sales"),
+    role === "sales" ? Promise.resolve([]) : readChanged("leads"),
+    role === "sales" ? Promise.resolve([]) : readChanged("spend"),
+    role === "sales" ? Promise.resolve([]) : readChanged("ads"),
+    readSettings(),
+  ]);
+  return {
+    ...structuredClone(defaultDb),
+    compact: true,
+    partial,
+    serverTime,
+    conversations,
+    messages: [],
+    sales,
+    leads,
+    spend,
+    ads,
+    rules: settings.rules || defaultDb.rules,
+    crmTags: normalizeCrmTags(settings.crmTags || defaultDb.crmTags),
+    campaignPeriods: settings.campaignPeriods || [],
+    webhookEvents: (settings.webhookEvents || []).slice(-20),
+    lastCoexistenceSync: settings.lastCoexistenceSync || null,
+    lastAdsSync: settings.lastAdsSync || null,
+    lastAdsRange: settings.lastAdsRange || null,
+    lastWebhookAt: settings.lastWebhookAt || null,
+  };
+}
+
 async function readCollection(collection: Collection) {
   const pageSize = 1000;
   const items = [];
@@ -420,6 +582,157 @@ async function readCollection(collection: Collection) {
     if (rows.length < pageSize) break;
   }
   return items;
+}
+
+async function readRecentCollection(collection: Collection, limit: number) {
+  const params = new URLSearchParams({
+    select: "data",
+    order: "updated_at.desc",
+    limit: String(limit),
+  });
+  const response = await supabaseFetch(`/rest/v1/${tableMap[collection]}?${params.toString()}`);
+  const rows = await response.json();
+  if (!response.ok) throw new Error(rows.message || `No se pudo leer ${collection}`);
+  return rows.map((row: { data: unknown }) => row.data);
+}
+
+async function readCollectionUpdatedSince(collection: Collection, since: string) {
+  if (!since) return readCollection(collection);
+  const pageSize = 1000;
+  const items = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const params = new URLSearchParams({
+      select: "data",
+      updated_at: `gt.${since}`,
+      order: "updated_at.asc",
+      limit: String(pageSize),
+      offset: String(offset),
+    });
+    const response = await supabaseFetch(`/rest/v1/${tableMap[collection]}?${params.toString()}`);
+    const rows = await response.json();
+    if (!response.ok) throw new Error(rows.message || `No se pudo actualizar ${collection}`);
+    items.push(...rows.map((row: { data: unknown }) => row.data));
+    if (rows.length < pageSize) break;
+  }
+  return items;
+}
+
+async function readItemById(collection: Collection, id: string) {
+  if (!id) return null;
+  const params = new URLSearchParams({ select: "data", id: `eq.${id}`, limit: "1" });
+  const response = await supabaseFetch(`/rest/v1/${tableMap[collection]}?${params.toString()}`);
+  const rows = await response.json();
+  if (!response.ok) throw new Error(rows.message || `No se pudo leer ${collection}`);
+  return rows[0]?.data || null;
+}
+
+async function readItemsByIds(collection: Collection, ids: string[]) {
+  const uniqueIds = [...new Set(ids.map((id) => String(id || "")).filter(Boolean))];
+  if (!uniqueIds.length) return [];
+  const items = [];
+  const batchSize = 100;
+  for (let offset = 0; offset < uniqueIds.length; offset += batchSize) {
+    const batch = uniqueIds.slice(offset, offset + batchSize);
+    const filter = `in.(${batch.map(quotePostgrestValue).join(",")})`;
+    const params = new URLSearchParams({ select: "data", id: filter });
+    const response = await supabaseFetch(`/rest/v1/${tableMap[collection]}?${params.toString()}`);
+    const rows = await response.json();
+    if (!response.ok) throw new Error(rows.message || `No se pudo leer ${collection}`);
+    items.push(...rows.map((row: { data: unknown }) => row.data));
+  }
+  return items;
+}
+
+function quotePostgrestValue(value: string) {
+  return `"${String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+async function readCollectionByJsonField(
+  collection: Collection,
+  field: string,
+  value: string,
+  options: { limit?: number; order?: string } = {},
+) {
+  if (!value) return [];
+  const params = new URLSearchParams({
+    select: "data",
+    [`data->>${field}`]: `eq.${value}`,
+    order: options.order || "updated_at.desc",
+    limit: String(options.limit || 20),
+  });
+  const response = await supabaseFetch(`/rest/v1/${tableMap[collection]}?${params.toString()}`);
+  const rows = await response.json();
+  if (!response.ok) throw new Error(rows.message || `No se pudo buscar ${collection}`);
+  return rows.map((row: { data: unknown }) => row.data);
+}
+
+async function readConversationMessages(
+  conversationId: string,
+  options: { limit: number; before?: string },
+) {
+  if (!conversationId) throw new HttpError(400, "Falta id de conversación");
+  const requested = Math.min(CONVERSATION_MESSAGE_LIMIT, Math.max(1, Number(options.limit || CONVERSATION_MESSAGE_LIMIT)));
+  const params = new URLSearchParams({
+    select: "data",
+    "data->>conversationId": `eq.${conversationId}`,
+    order: "data->>at.desc",
+    limit: String(requested + 1),
+  });
+  if (options.before) params.set("data->>at", `lt.${options.before}`);
+  const response = await supabaseFetch(`/rest/v1/${tableMap.messages}?${params.toString()}`);
+  const rows = await response.json();
+  if (!response.ok) throw new Error(rows.message || "No se pudo leer el historial");
+  const page = rows.slice(0, requested).map((row: { data: unknown }) => row.data as Record<string, any>);
+  const oldest = page[page.length - 1];
+  return {
+    partial: true,
+    conversationId,
+    messages: page.reverse(),
+    hasMore: rows.length > requested,
+    nextBefore: oldest?.at || "",
+  };
+}
+
+async function searchConversations(query: string, limit: number) {
+  const normalizedQuery = normalizeSearchValue(query);
+  if (normalizedQuery.length < 2) return readRecentCollection("conversations", limit);
+  const conversations = await readCollection("conversations");
+  return conversations
+    .filter((conversation: any) => conversationSearchValue(conversation).includes(normalizedQuery))
+    .sort((a: any, b: any) => Date.parse(String(b.lastAt || b.updatedAt || "")) - Date.parse(String(a.lastAt || a.updatedAt || "")))
+    .slice(0, limit);
+}
+
+function conversationSearchValue(conversation: any) {
+  return normalizeSearchValue([
+    conversation?.name,
+    conversation?.customName,
+    conversation?.phone,
+    conversation?.contactId,
+    conversation?.lastMessage,
+    conversation?.ad,
+    conversation?.adset,
+    conversation?.campaign,
+  ].filter(Boolean).join(" "));
+}
+
+function normalizeSearchValue(value: unknown) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function normalizeSyncCursor(value: unknown) {
+  const cursor = String(value || "").trim();
+  return Number.isFinite(Date.parse(cursor)) ? new Date(cursor).toISOString() : "";
+}
+
+function clampInteger(value: unknown, min: number, max: number, fallback: number) {
+  const parsed = Number.parseInt(String(value || ""), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
 }
 
 async function readSettings() {
@@ -438,11 +751,17 @@ async function setSetting(key: string, value: unknown) {
   if (!response.ok) throw new Error((await response.json()).message || "No se pudo guardar configuración");
 }
 
-async function upsertItems(collection: Collection, items: Array<Record<string, unknown>>) {
+async function upsertItems(
+  collection: Collection,
+  items: Array<Record<string, unknown>>,
+  existingOverride?: Array<Record<string, unknown>>,
+) {
   if (!items.length) return;
   const table = tableMap[collection];
   const compacted = compactItemsById(items);
-  const existing = collection === "conversations" ? await readCollection("conversations") : [];
+  const existing = collection === "conversations"
+    ? existingOverride ?? await readItemsByIds("conversations", compacted.map((item) => String(item.id || "")))
+    : [];
   const existingById = new Map(existing.map((item: any) => [String(item.id || ""), item]));
   const rows = compacted.map((item) => {
     const id = String(item.id);
@@ -535,9 +854,9 @@ function mergeConversationData(existing: any, incoming: Record<string, unknown>)
 
 async function updateConversation(id: string, body: any) {
   if (!id) throw new HttpError(400, "Falta id de conversación");
-  const existing = (await readCollection("conversations")).find((item: any) => String(item.id || "") === id) || {};
+  const existing = await readItemById("conversations", id) || {};
   const conversation = normalizeConversationPatch({ ...existing, ...body, id });
-  await upsertItems("conversations", [conversation]);
+  await upsertItems("conversations", [conversation], existing?.id ? [existing] : []);
   return conversation;
 }
 
@@ -588,7 +907,7 @@ async function saveCrmTag(body: any) {
   const index = tags.findIndex((item) => item.id === tag.id);
   const next = index >= 0 ? tags.map((item, itemIndex) => (itemIndex === index ? { ...item, ...tag } : item)) : [...tags, tag];
   await setSetting("crmTags", next);
-  return tag;
+  return next;
 }
 
 function normalizeCrmTags(value: unknown) {
@@ -931,7 +1250,7 @@ async function sendCrmMessage(body: any) {
   const media = normalizeOutgoingMedia(body);
   if (!channel || !conversationId || !to || (!textBody && !media.url && !media.id)) throw new Error("Faltan datos para enviar el mensaje");
 
-  let providerMessageId = crypto.randomUUID();
+  let providerMessageId: string = crypto.randomUUID();
   if (channel === "whatsapp") providerMessageId = await sendWhatsAppMessage(to, textBody, media);
   else if (channel === "messenger") providerMessageId = await sendMessengerMessage(to, textBody, media);
   else if (channel === "instagram") providerMessageId = await sendInstagramMessage(to, textBody, media);
@@ -1275,7 +1594,7 @@ async function sendMessengerText(to: string, textBody: string) {
   return await sendMessengerMessage(to, textBody, { type: "", url: "", filename: "" });
 }
 
-async function sendMessengerMessage(to: string, textBody: string, media: { type: string; url: string }) {
+async function sendMessengerMessage(to: string, textBody: string, media: { type: string; url: string; filename?: string }) {
   const token = messengerAccessToken();
   if (!token) throw new Error("Falta MESSENGER_PAGE_ACCESS_TOKEN o META_PAGE_ACCESS_TOKEN para Messenger");
   let lastMessageId = "";
@@ -1313,7 +1632,7 @@ async function sendInstagramText(to: string, textBody: string) {
   return await sendInstagramMessage(to, textBody, { type: "", url: "", filename: "" });
 }
 
-async function sendInstagramMessage(to: string, textBody: string, media: { type: string; url: string }) {
+async function sendInstagramMessage(to: string, textBody: string, media: { type: string; url: string; filename?: string }) {
   const token = instagramAccessToken();
   if (!token) throw new Error("Falta INSTAGRAM_ACCESS_TOKEN o META_INSTAGRAM_ACCESS_TOKEN para Instagram");
   if (media.url) {
@@ -1826,7 +2145,7 @@ async function graphRequest(path: string, token: string, method: "GET" | "POST",
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
   const response = await fetch(url.toString(), { method });
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error?.message || `Graph API respondio ${response.status}`);
+  if (!response.ok) throw new Error(graphApiErrorMessage(payload, response.status));
   return payload;
 }
 
@@ -1840,8 +2159,39 @@ async function graphJsonRequest(path: string, token: string, method: "POST", bod
     body: JSON.stringify(body),
   });
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error?.message || `Graph API respondio ${response.status}`);
+  if (!response.ok) throw new Error(graphApiErrorMessage(payload, response.status));
   return payload;
+}
+
+async function graphFormRequest(
+  path: string,
+  token: string,
+  method: "POST" | "DELETE",
+  params: Record<string, string>,
+) {
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  const url = new URL(`https://graph.facebook.com/${graphVersion()}${cleanPath}`);
+  const body = new URLSearchParams(params);
+  body.set("access_token", token);
+  const response = await fetch(url.toString(), {
+    method,
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(graphApiErrorMessage(payload, response.status));
+  return payload;
+}
+
+function graphApiErrorMessage(payload: any, status: number) {
+  const error = payload?.error || {};
+  const details = [
+    error.code ? `code ${error.code}` : "",
+    error.error_subcode ? `subcode ${error.error_subcode}` : "",
+    error.type ? String(error.type) : "",
+  ].filter(Boolean).join(", ");
+  const message = String(error.message || `Graph API respondio ${status}`);
+  return details ? `${message} (${details})` : message;
 }
 
 function absoluteWebhookUrl(requestUrl: URL, path: string) {
@@ -2087,6 +2437,436 @@ async function sha256Hex(value: string) {
   const encoded = new TextEncoder().encode(String(value || "").trim().toLowerCase());
   const digest = await crypto.subtle.digest("SHA-256", encoded);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function syncConfirmedSaleToMeta(sale: Record<string, any>) {
+  const [purchaseResult, audienceResult] = await Promise.allSettled([
+    sendPurchaseEventToMeta(sale),
+    syncBuyerAudience({ force: false }),
+  ]);
+  const purchase = purchaseResult.status === "fulfilled"
+    ? purchaseResult.value
+    : { ok: false, error: purchaseResult.reason instanceof Error ? purchaseResult.reason.message : "Error CAPI" };
+  const audience = audienceResult.status === "fulfilled"
+    ? audienceResult.value
+    : { ok: false, error: audienceResult.reason instanceof Error ? audienceResult.reason.message : "Error de público" };
+  const summary = {
+    ok: purchase.ok && audience.ok,
+    saleId: String(sale.id || ""),
+    purchase,
+    audience,
+    at: new Date().toISOString(),
+  };
+  try {
+    await setSetting("lastMetaCommerceSync", summary);
+  } catch (error) {
+    console.error("No se pudo guardar el resumen Meta Commerce", error instanceof Error ? error.message : error);
+  }
+  return summary;
+}
+
+async function sendPurchaseEventToMeta(sale: Record<string, any>) {
+  const saleId = String(sale.id || "").trim();
+  const phone = normalizePhone(sale.phone || "");
+  const amount = Number(sale.amount || 0);
+  if (!saleId || !phone || !Number.isFinite(amount) || amount <= 0) {
+    return { ok: true, skipped: true, reason: "invalid_confirmed_sale", saleId };
+  }
+
+  const settings = await readSettings();
+  const settingKey = `${META_PURCHASE_SETTING_PREFIX}${saleId}`;
+  const previous = settings[settingKey] as Record<string, any> | undefined;
+  if (previous?.status === "sent") {
+    return {
+      ok: true,
+      skipped: true,
+      reason: "already_sent",
+      saleId,
+      eventId: String(previous.eventId || purchaseEventId(saleId)),
+    };
+  }
+
+  const eventTime = salePurchaseEventTime(sale);
+  const now = Math.floor(Date.now() / 1000);
+  if (eventTime < now - META_PURCHASE_MAX_AGE_SECONDS) {
+    return { ok: true, skipped: true, reason: "outside_meta_7_day_window", saleId, eventTime };
+  }
+
+  const pixelId = metaPixelId();
+  const token = metaCapiAccessToken();
+  if (!pixelId || !token) {
+    return { ok: false, skipped: true, reason: "missing_meta_capi_config", saleId };
+  }
+
+  const eventId = purchaseEventId(saleId);
+  const products = Array.isArray(sale.products)
+    ? sale.products.map((product: unknown) => String(product).trim()).filter(Boolean)
+    : String(sale.product || "").split(/[|,]/).map((product) => product.trim()).filter(Boolean);
+  const phoneHash = await sha256Hex(phone);
+  const externalId = await sha256Hex(`bormex_buyer:${phone}`);
+  const siteUrl = Deno.env.get("BORMEX_SITE_URL") || Deno.env.get("PUBLIC_SITE_URL") || "https://bormex-souvenirs-web.vercel.app/";
+  const event = {
+    event_name: "Purchase",
+    event_time: Math.min(eventTime, now),
+    event_id: eventId,
+    action_source: "chat",
+    event_source_url: String(sale.sourceUrl || siteUrl),
+    user_data: {
+      ph: [phoneHash],
+      external_id: [externalId],
+    },
+    custom_data: compactMetaCapiData({
+      currency: "MXN",
+      value: Math.round(amount * 100) / 100,
+      order_id: saleId,
+      content_name: products.join(", ") || "Souvenirs personalizados",
+      content_category: "BORMEX venta confirmada",
+      content_type: "product",
+      content_ids: products,
+      contents: products.map((product: string) => ({ id: product, quantity: 1 })),
+      num_items: products.length || 1,
+      messaging_channel: "whatsapp",
+      ad_id: normalizeAdId(sale.adId || ""),
+      ad_name: String(sale.ad || ""),
+      adset_name: String(sale.adset || ""),
+      campaign_id: String(sale.campaignId || ""),
+      campaign_name: String(sale.campaign || ""),
+      ctwa_clid: String(sale.ctwaClid || ""),
+      attribution_source: String(sale.attributionSource || ""),
+    }),
+  };
+
+  await setSetting(settingKey, {
+    status: "pending",
+    eventId,
+    eventTime: event.event_time,
+    updatedAt: new Date().toISOString(),
+  });
+
+  try {
+    const body: Record<string, unknown> = { data: [event] };
+    const testEventCode = Deno.env.get("META_CAPI_TEST_EVENT_CODE") || Deno.env.get("META_TEST_EVENT_CODE") || "";
+    if (testEventCode) body.test_event_code = testEventCode;
+    const result = await graphJsonRequest(`/${pixelId}/events`, token, "POST", body);
+    const delivery = {
+      status: "sent",
+      eventId,
+      eventTime: event.event_time,
+      eventsReceived: Number(result.events_received || 0),
+      fbtraceId: String(result.fbtrace_id || ""),
+      sentAt: new Date().toISOString(),
+    };
+    await setSetting(settingKey, delivery);
+    return { ok: true, saleId, ...delivery };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Meta CAPI no respondio";
+    console.error("Meta CAPI Purchase error", saleId, message);
+    await setSetting(settingKey, {
+      status: "failed",
+      eventId,
+      eventTime: event.event_time,
+      error: message,
+      updatedAt: new Date().toISOString(),
+    });
+    return { ok: false, saleId, eventId, error: message };
+  }
+}
+
+async function syncEligiblePurchaseEvents() {
+  const [sales, settings] = await Promise.all([readCollection("sales"), readSettings()]);
+  const now = Math.floor(Date.now() / 1000);
+  const eligible = sales
+    .filter((sale: any) => {
+      const saleId = String(sale.id || "");
+      if (!saleId || !normalizePhone(sale.phone || "") || Number(sale.amount || 0) <= 0) return false;
+      if ((settings[`${META_PURCHASE_SETTING_PREFIX}${saleId}`] as any)?.status === "sent") return false;
+      return salePurchaseEventTime(sale) >= now - META_PURCHASE_MAX_AGE_SECONDS;
+    })
+    .sort((a: any, b: any) => salePurchaseEventTime(a) - salePurchaseEventTime(b));
+
+  const results = [];
+  for (const sale of eligible) results.push(await sendPurchaseEventToMeta(sale));
+  const failed = results.filter((result: any) => !result.ok);
+  return {
+    ok: failed.length === 0,
+    eligible: eligible.length,
+    sent: results.filter((result: any) => result.ok && !result.skipped).length,
+    skipped: results.filter((result: any) => result.skipped).length,
+    failed: failed.length,
+    errors: failed.map((result: any) => ({ saleId: result.saleId, error: result.error || result.reason })),
+    at: new Date().toISOString(),
+  };
+}
+
+function purchaseEventId(saleId: string) {
+  return `bormex_purchase_${saleId}`;
+}
+
+function salePurchaseEventTime(sale: Record<string, any>) {
+  const confirmedAt = Date.parse(String(sale.confirmedAt || ""));
+  if (Number.isFinite(confirmedAt)) return Math.floor(confirmedAt / 1000);
+
+  const timestampMatch = String(sale.id || "").match(/(?:^|_)(\d{13})(?:_|$)/);
+  const idTimestamp = Number(timestampMatch?.[1] || 0);
+  if (idTimestamp > 946684800000 && idTimestamp < Date.now() + 24 * 60 * 60 * 1000) {
+    return Math.floor(idTimestamp / 1000);
+  }
+
+  const localDate = Date.parse(`${String(sale.date || new Date().toISOString().slice(0, 10)).slice(0, 10)}T12:00:00-06:00`);
+  return Number.isFinite(localDate) ? Math.floor(localDate / 1000) : Math.floor(Date.now() / 1000);
+}
+
+async function syncBuyerAudience(options: { force?: boolean } = {}) {
+  const tokenCandidates = metaAudienceAccessTokens();
+  const accountId = metaAdAccountId();
+  if (!tokenCandidates.length || !accountId) {
+    return { ok: false, skipped: true, reason: "missing_meta_ads_config" };
+  }
+
+  try {
+    const [sales, settings] = await Promise.all([readCollection("sales"), readSettings()]);
+    const phones = uniqueBuyerPhones(sales);
+    const hashes = await Promise.all(phones.map((phone) => sha256Hex(phone)));
+    const fingerprint = await sha256Hex([...hashes].sort().join("|"));
+    const previous = (settings[META_BUYER_SYNC_SETTING] || {}) as Record<string, any>;
+    const storedAudience = (settings[META_BUYER_AUDIENCE_SETTING] || {}) as Record<string, any>;
+
+    if (!options.force && storedAudience.id && previous.fingerprint === fingerprint) {
+      return {
+        ok: true,
+        skipped: true,
+        reason: "audience_unchanged",
+        audienceId: String(storedAudience.id),
+        audienceName: META_BUYER_AUDIENCE_NAME,
+        buyerCount: phones.length,
+        fingerprint,
+      };
+    }
+
+    const tokenErrors = [];
+    for (const candidate of tokenCandidates) {
+      try {
+        const audience = await ensureMetaBuyerAudience(candidate.token, accountId, storedAudience);
+        const sourceMode = String(
+          audience.sourceMode || (String(audience.subtype || "").toUpperCase() === "WEBSITE" ? "capi_purchase_rule" : "customer_list"),
+        );
+        const batches = sourceMode === "customer_list" ? chunk(hashes, 500) : [];
+        let received = 0;
+        for (const batch of batches) {
+          if (!batch.length) continue;
+          const result = await graphFormRequest(`/${audience.id}/users`, candidate.token, "POST", {
+            payload: JSON.stringify({ schema: "PHONE_SHA256", is_raw: false, data: batch }),
+          });
+          received += Number(result.num_received || batch.length);
+        }
+
+        const at = new Date().toISOString();
+        const audienceSetting = {
+          id: String(audience.id),
+          name: META_BUYER_AUDIENCE_NAME,
+          accountId,
+          tokenSource: candidate.source,
+          sourceMode,
+          createdAt: String(storedAudience.createdAt || audience.time_created || at),
+          verifiedAt: at,
+        };
+        const syncSetting = {
+          status: "synced",
+          audienceId: String(audience.id),
+          tokenSource: candidate.source,
+          sourceMode,
+          fingerprint,
+          buyerCount: phones.length,
+          recordsReceived: received,
+          batches: batches.length,
+          syncedAt: at,
+        };
+        await Promise.all([
+          setSetting(META_BUYER_AUDIENCE_SETTING, audienceSetting),
+          setSetting(META_BUYER_SYNC_SETTING, syncSetting),
+        ]);
+        return {
+          ok: true,
+          audienceId: String(audience.id),
+          audienceName: META_BUYER_AUDIENCE_NAME,
+          tokenSource: candidate.source,
+          sourceMode,
+          buyerCount: phones.length,
+          recordsReceived: received,
+          batches: batches.length,
+          fingerprint,
+          syncedAt: at,
+        };
+      } catch (error) {
+        tokenErrors.push(`${candidate.source}: ${error instanceof Error ? error.message : "error desconocido"}`);
+      }
+    }
+    throw new Error(tokenErrors.join(" | "));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "No se pudo sincronizar el publico";
+    console.error("Meta buyer audience error", message);
+    try {
+      await setSetting(META_BUYER_SYNC_SETTING, {
+        status: "failed",
+        error: message,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch {
+      // The sale must remain saved even if both Meta and the settings write fail.
+    }
+    return { ok: false, error: message };
+  }
+}
+
+async function ensureMetaBuyerAudience(token: string, accountId: string, stored: Record<string, any>) {
+  if (stored.id) {
+    try {
+      const current = await graphRequest(`/${stored.id}`, token, "GET", { fields: "id,name,subtype,time_created" });
+      if (current?.id) return { ...current, sourceMode: stored.sourceMode || "" };
+    } catch {
+      // If the saved audience was removed in Meta, find or recreate it below.
+    }
+  }
+
+  const audiences = await listMetaBuyerAudiences(token, accountId);
+  const existing = audiences.find((audience: any) => String(audience.name || "") === META_BUYER_AUDIENCE_NAME);
+  if (existing) return existing;
+
+  try {
+    const audience = await graphFormRequest(`/${accountId}/customaudiences`, token, "POST", {
+      name: META_BUYER_AUDIENCE_NAME,
+      subtype: "CUSTOM",
+      description: "Compradores confirmados en Bormex CRM. Sincronizacion SHA-256 automatica.",
+      customer_file_source: "USER_PROVIDED_ONLY",
+    });
+    return { ...audience, sourceMode: "customer_list" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!message.includes("subcode 1870090")) throw error;
+    const pixelId = metaPixelId();
+    if (!pixelId) throw error;
+    const rule = {
+      inclusions: {
+        operator: "or",
+        rules: [{
+          event_sources: [{ id: pixelId, type: "pixel" }],
+          retention_seconds: 180 * 24 * 60 * 60,
+          filter: {
+            operator: "and",
+            filters: [{ field: "event", operator: "eq", value: "Purchase" }],
+          },
+        }],
+      },
+    };
+    const audience = await graphFormRequest(`/${accountId}/customaudiences`, token, "POST", {
+      name: META_BUYER_AUDIENCE_NAME,
+      description: "Compradores confirmados por Purchase CAPI desde Bormex CRM.",
+      rule: JSON.stringify(rule),
+      prefill: "1",
+    });
+    return { ...audience, sourceMode: "capi_purchase_rule" };
+  }
+}
+
+async function listMetaBuyerAudiences(token: string, accountId: string) {
+  const payload = await graphRequest(`/${accountId}/customaudiences`, token, "GET", {
+    fields: "id,name,subtype,delivery_status,operation_status,approximate_count_lower_bound,approximate_count_upper_bound,time_created,time_updated",
+    limit: "500",
+  });
+  return Array.isArray(payload.data) ? payload.data : [];
+}
+
+async function getMetaBuyerStatus() {
+  const [sales, settings] = await Promise.all([readCollection("sales"), readSettings()]);
+  const audienceSetting = (settings[META_BUYER_AUDIENCE_SETTING] || {}) as Record<string, any>;
+  const syncSetting = (settings[META_BUYER_SYNC_SETTING] || {}) as Record<string, any>;
+  const purchaseRows = Object.entries(settings)
+    .filter(([key]) => key.startsWith(META_PURCHASE_SETTING_PREFIX))
+    .map(([, value]) => value as Record<string, any>);
+  const token = metaAdsAccessToken();
+  const accountId = metaAdAccountId();
+  let matchingAudiences: any[] = [];
+  let audienceError = "";
+  if (token && accountId) {
+    try {
+      matchingAudiences = (await listMetaBuyerAudiences(token, accountId))
+        .filter((audience: any) => String(audience.name || "") === META_BUYER_AUDIENCE_NAME);
+    } catch (error) {
+      audienceError = error instanceof Error ? error.message : "No se pudo consultar Meta";
+    }
+  }
+  return {
+    ok: !audienceError,
+    audience: {
+      configuredId: String(audienceSetting.id || ""),
+      name: META_BUYER_AUDIENCE_NAME,
+      buyerCount: uniqueBuyerPhones(sales).length,
+      sync: syncSetting,
+      matchesInMeta: matchingAudiences.length,
+      duplicateAudienceIds: matchingAudiences.slice(1).map((audience: any) => String(audience.id || "")),
+      meta: matchingAudiences[0] || null,
+      error: audienceError,
+    },
+    purchases: {
+      totalSales: sales.length,
+      sent: purchaseRows.filter((row) => row.status === "sent").length,
+      pending: purchaseRows.filter((row) => row.status === "pending").length,
+      failed: purchaseRows.filter((row) => row.status === "failed").length,
+      eligibleUnsent: sales.filter((sale: any) => {
+        const key = `${META_PURCHASE_SETTING_PREFIX}${String(sale.id || "")}`;
+        return Number(sale.amount || 0) > 0 && salePurchaseEventTime(sale) >= Math.floor(Date.now() / 1000) - META_PURCHASE_MAX_AGE_SECONDS &&
+          (settings[key] as any)?.status !== "sent";
+      }).length,
+    },
+    at: new Date().toISOString(),
+  };
+}
+
+async function removeBuyerFromAudienceIfUnused(phoneValue: string) {
+  const phone = normalizePhone(phoneValue);
+  if (!phone) return { ok: true, skipped: true, reason: "missing_phone" };
+  const [sales, settings] = await Promise.all([readCollection("sales"), readSettings()]);
+  if (sales.some((sale: any) => normalizePhone(sale.phone || "") === phone)) {
+    return { ok: true, skipped: true, reason: "buyer_has_other_sales" };
+  }
+  const audience = (settings[META_BUYER_AUDIENCE_SETTING] || {}) as Record<string, any>;
+  const token = metaAdsAccessToken();
+  if (!audience.id || !token) return { ok: true, skipped: true, reason: "audience_not_configured" };
+  if (audience.sourceMode === "capi_purchase_rule") {
+    return { ok: true, skipped: true, reason: "event_rule_audience_uses_retention" };
+  }
+  try {
+    const hash = await sha256Hex(phone);
+    const result = await graphFormRequest(`/${audience.id}/users`, token, "DELETE", {
+      payload: JSON.stringify({ schema: "PHONE_SHA256", is_raw: false, data: [hash] }),
+    });
+    await setSetting(META_BUYER_SYNC_SETTING, {
+      ...(settings[META_BUYER_SYNC_SETTING] as Record<string, any> || {}),
+      fingerprint: "",
+      buyerCount: uniqueBuyerPhones(sales).length,
+      lastRemovalAt: new Date().toISOString(),
+    });
+    return { ok: true, removed: Number(result.num_received || 1), audienceId: String(audience.id) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "No se pudo retirar el comprador";
+    console.error("Meta buyer removal error", message);
+    return { ok: false, error: message };
+  }
+}
+
+function uniqueBuyerPhones(sales: any[]) {
+  return [...new Set(
+    sales
+      .filter((sale: any) => Number(sale.amount || 0) > 0)
+      .map((sale: any) => normalizePhone(sale.phone || ""))
+      .filter(Boolean),
+  )].sort();
+}
+
+function chunk<T>(values: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += size) chunks.push(values.slice(index, index + size));
+  return chunks;
 }
 
 function getWhatsAppContactSyncItems(value: any) {
@@ -2351,27 +3131,64 @@ function normalizeSale(body: any) {
     adset: String(body.adset || ""),
     campaign: String(body.campaign || ""),
     campaignId: String(body.campaignId || ""),
+    ctwaClid: String(body.ctwaClid || body.ctwa_clid || ""),
+    sourceUrl: String(body.sourceUrl || body.source_url || ""),
     attributionSource: String(body.attributionSource || ""),
     sourceConversationId: String(body.sourceConversationId || ""),
+    confirmedAt: String(body.confirmedAt || body.confirmed_at || ""),
   };
 }
 
 async function enrichSaleAttribution(sale: Record<string, any>) {
-  if (hasAttribution(sale)) return sale;
-  const db = await readDb();
-  const attribution = findSaleAttribution(sale, db);
+  const attribution = await findSaleAttributionFromDb(sale);
   if (!attribution) {
-    return { ...sale, attributionSource: sale.attributionSource || "missing_meta_referral" };
+    return {
+      ...sale,
+      attributionSource: sale.attributionSource || (hasAttribution(sale) ? "manual_sale_attribution" : "missing_meta_referral"),
+    };
   }
   return {
     ...sale,
-    adId: attribution.adId || "",
-    ad: attribution.ad || "",
-    adset: attribution.adset || "",
-    campaign: attribution.campaign || "",
-    campaignId: attribution.campaignId || "",
-    attributionSource: attribution.attributionSource || "auto_sale_attribution",
+    adId: sale.adId || attribution.adId || "",
+    ad: sale.ad || attribution.ad || "",
+    adset: sale.adset || attribution.adset || "",
+    campaign: sale.campaign || attribution.campaign || "",
+    campaignId: sale.campaignId || attribution.campaignId || "",
+    ctwaClid: sale.ctwaClid || attribution.ctwaClid || "",
+    sourceUrl: sale.sourceUrl || attribution.sourceUrl || "",
+    attributionSource: sale.attributionSource || attribution.attributionSource || "auto_sale_attribution",
   };
+}
+
+async function findSaleAttributionFromDb(sale: Record<string, any>) {
+  const sourceConversationId = String(sale.sourceConversationId || "").trim();
+  const phone = normalizePhone(sale.phone || "");
+  const [directConversation, phoneConversations, contactConversations, leads] = await Promise.all([
+    sourceConversationId ? readItemById("conversations", sourceConversationId) : Promise.resolve(null),
+    phone ? readCollectionByJsonField("conversations", "phone", phone, { limit: 10 }) : Promise.resolve([]),
+    phone ? readCollectionByJsonField("conversations", "contactId", phone, { limit: 10 }) : Promise.resolve([]),
+    phone ? readCollectionByJsonField("leads", "phone", phone, { limit: 20 }) : Promise.resolve([]),
+  ]);
+  const conversations = compactItemsById([
+    ...(directConversation ? [directConversation] : []),
+    ...phoneConversations,
+    ...contactConversations,
+  ]);
+  const context = {
+    ...structuredClone(defaultDb),
+    conversations,
+    leads,
+  };
+  const directAttribution = findSaleAttribution(sale, context);
+  if (directAttribution) return directAttribution;
+
+  const messagePages = await Promise.all(
+    conversations.slice(0, 3).map((conversation: any) =>
+      readConversationMessages(String(conversation.id || ""), { limit: 100 }).catch(() => ({ messages: [] }))
+    ),
+  );
+  context.messages = messagePages.flatMap((page: any) => page.messages || []);
+  return findSaleAttribution(sale, context);
 }
 
 function findSaleAttribution(sale: Record<string, any>, db: typeof defaultDb) {
@@ -2615,6 +3432,26 @@ function metaAppSecret() {
 
 function metaAdsAccessToken() {
   return Deno.env.get("META_ADS_ACCESS_TOKEN") || Deno.env.get("META_ACCESS_TOKEN") || "";
+}
+
+function metaAudienceAccessTokens() {
+  const candidates = [
+    { source: "META_ADS_ACCESS_TOKEN", token: Deno.env.get("META_ADS_ACCESS_TOKEN") || "" },
+    { source: "META_ACCESS_TOKEN", token: Deno.env.get("META_ACCESS_TOKEN") || "" },
+    { source: "META_CAPI_ACCESS_TOKEN", token: Deno.env.get("META_CAPI_ACCESS_TOKEN") || "" },
+  ];
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    if (!candidate.token || seen.has(candidate.token)) return false;
+    seen.add(candidate.token);
+    return true;
+  });
+}
+
+function metaAdAccountId() {
+  const raw = String(Deno.env.get("META_AD_ACCOUNT_ID") || "").trim();
+  if (!raw) return "";
+  return raw.startsWith("act_") ? raw : `act_${raw}`;
 }
 
 function metaCapiAccessToken() {

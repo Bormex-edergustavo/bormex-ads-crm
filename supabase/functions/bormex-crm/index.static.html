@@ -1475,6 +1475,16 @@ textarea:focus {
   padding: 16px;
 }
 
+.thread-history-action {
+  display: flex;
+  justify-content: center;
+  min-height: 36px;
+}
+
+.thread-history-action .compact {
+  margin-top: 0;
+}
+
 .message-bubble {
   max-width: min(820px, 88%);
   border-radius: var(--radius);
@@ -2340,7 +2350,8 @@ textarea:focus {
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
     <script>
-const STORAGE_KEY = "ventas_ads_state_v1";
+const STORAGE_KEY = "ventas_ads_ui_state_v2";
+const LEGACY_STORAGE_KEY = "ventas_ads_state_v1";
 const AUTH_STORAGE_KEY = "ventas_ads_panel_code_v1";
 const SIDEBAR_COLLAPSED_KEY = "ventas_ads_sidebar_collapsed_v1";
 const ADS_ACCESS_CODE = "2607";
@@ -2394,6 +2405,11 @@ let remoteRequestVersion = 0;
 let syncInFlight = null;
 let syncQueued = false;
 let saleSaveInFlight = false;
+let lastCompactSyncAt = "";
+let remoteCoexistenceSetup = null;
+let crmSearchTimer = null;
+let crmSearchRequestVersion = 0;
+const conversationMessageState = new Map();
 const mediaObjectUrlCache = new Map();
 
 const money = new Intl.NumberFormat("es-MX", {
@@ -2459,17 +2475,29 @@ function uid(prefix) {
 
 function loadState() {
   try {
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
     const saved = localStorage.getItem(STORAGE_KEY);
     if (!saved) return structuredClone(defaultState);
-    return { ...structuredClone(defaultState), ...JSON.parse(saved) };
+    const preferences = JSON.parse(saved);
+    return {
+      ...structuredClone(defaultState),
+      filters: { ...structuredClone(defaultState.filters), ...(preferences.filters || {}) },
+      rules: { ...structuredClone(defaultState.rules), ...(preferences.rules || {}) },
+    };
   } catch {
     return structuredClone(defaultState);
   }
 }
 
 function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  document.getElementById("storageStatus").textContent = `Guardado ${new Date().toLocaleTimeString("es-MX", {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ filters: state.filters, rules: state.rules }));
+  } catch {
+    // Las preferencias son prescindibles; los datos reales permanecen en Supabase.
+  }
+  const status = document.getElementById("storageStatus");
+  if (!status) return;
+  status.textContent = `Actualizado ${new Date().toLocaleTimeString("es-MX", {
     hour: "2-digit",
     minute: "2-digit",
   })}`;
@@ -2477,6 +2505,20 @@ function saveState() {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resetRemoteSessionState({ clearData = false } = {}) {
+  remoteConfig = {};
+  remoteCoexistenceSetup = null;
+  lastCompactSyncAt = "";
+  conversationMessageState.clear();
+  activeConversationId = "";
+  if (clearData) {
+    const filters = structuredClone(state.filters || defaultState.filters);
+    state = { ...structuredClone(defaultState), filters };
+  } else {
+    state.messages = [];
+  }
 }
 
 async function api(path, options = {}) {
@@ -2499,6 +2541,7 @@ async function api(path, options = {}) {
   if (response.status === 401) {
     panelCode = "";
     localStorage.removeItem(AUTH_STORAGE_KEY);
+    resetRemoteSessionState({ clearData: true });
     showAuthGate();
     throw new Error("Ingresa el código del panel");
   }
@@ -2547,6 +2590,7 @@ async function apiForm(path, formData) {
   if (response.status === 401) {
     panelCode = "";
     localStorage.removeItem(AUTH_STORAGE_KEY);
+    resetRemoteSessionState({ clearData: true });
     showAuthGate();
     throw new Error("Ingresa el código del panel");
   }
@@ -2565,6 +2609,7 @@ async function apiBlob(path) {
   if (response.status === 401) {
     panelCode = "";
     localStorage.removeItem(AUTH_STORAGE_KEY);
+    resetRemoteSessionState({ clearData: true });
     showAuthGate();
     throw new Error("Ingresa el código del panel");
   }
@@ -2604,6 +2649,7 @@ function showAuthGate() {
   document.body.appendChild(gate);
   document.getElementById("authForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    resetRemoteSessionState({ clearData: true });
     panelCode = event.currentTarget.elements.code.value.trim();
     accessRole = roleFromCode(panelCode);
     localStorage.setItem(AUTH_STORAGE_KEY, panelCode);
@@ -2624,45 +2670,70 @@ async function syncFromServer() {
   }
   const requestVersion = ++remoteRequestVersion;
   syncInFlight = (async () => {
-    const [config, remoteState, coexistenceSetup] = await Promise.all([
-      api("/api/config"),
-      api("/api/state"),
-      api("/api/meta/coexistence").catch(() => null),
+    const statePath = `/api/state?compact=1${lastCompactSyncAt ? `&since=${encodeURIComponent(lastCompactSyncAt)}` : ""}`;
+    const needsSetup = !Object.keys(remoteConfig || {}).length;
+    const coexistenceRequest = needsSetup ? api("/api/meta/coexistence").catch(() => null) : null;
+    const [config, remoteState] = await Promise.all([
+      needsSetup ? api("/api/config") : Promise.resolve(remoteConfig),
+      api(statePath),
     ]);
     if (requestVersion !== remoteRequestVersion) return;
     serverAvailable = true;
     remoteConfig = config || {};
     accessRole = config.role || roleFromCode(panelCode) || accessRole;
     mergeRemoteState(remoteState);
-    renderConnectionStatus(config, remoteState, coexistenceSetup);
+    lastCompactSyncAt = remoteState.serverTime || lastCompactSyncAt;
+    renderConnectionStatus(config, remoteState, remoteCoexistenceSetup);
     saveState();
+    const activeConversationChanged = Array.isArray(remoteState.conversations)
+      && remoteState.conversations.some((conversation) => conversation.id === activeConversationId);
+    if (getActiveView() === "crm" && activeConversationId && activeConversationChanged) {
+      loadConversationMessages(activeConversationId, { force: true, silent: true }).catch(() => {});
+    }
+    if (coexistenceRequest) {
+      coexistenceRequest.then((setup) => {
+        if (requestVersion !== remoteRequestVersion) return;
+        remoteCoexistenceSetup = setup;
+        renderConnectionStatus(remoteConfig, remoteState, setup);
+      });
+    }
+    return remoteState.partial !== true
+      || ["conversations", "messages", "sales", "leads", "spend", "ads"]
+        .some((collection) => Array.isArray(remoteState[collection]) && remoteState[collection].length > 0)
+      || Boolean(remoteState.deleted);
   })();
+  let changed = false;
   try {
-    await syncInFlight;
+    changed = Boolean(await syncInFlight);
   } catch {
     if (requestVersion !== remoteRequestVersion) return;
     serverAvailable = false;
     remoteConfig = {};
+    remoteCoexistenceSetup = null;
     renderConnectionStatus(null, null);
   } finally {
     syncInFlight = null;
     if (syncQueued) {
       syncQueued = false;
-      await syncFromServer();
+      changed = Boolean(await syncFromServer()) || changed;
     }
   }
+  return changed;
 }
 
 function scheduleFreshSync(delay = 1200) {
   window.setTimeout(() => {
-    syncFromServer().then(render).catch(() => {});
+    syncFromServer().then((changed) => {
+      if (changed) render();
+    }).catch(() => {});
   }, delay);
 }
 
 async function refreshCachedState() {
   try {
-    const remoteState = await api("/api/state");
+    const remoteState = await api("/api/state?compact=1");
     mergeRemoteState(remoteState);
+    lastCompactSyncAt = remoteState.serverTime || lastCompactSyncAt;
     return true;
   } catch {
     return false;
@@ -2860,6 +2931,8 @@ async function refreshMetaSetup() {
   try {
     await api("/api/meta/subscribe", { method: "POST" });
     await api("/api/meta/coexistence/sync", { method: "POST", body: JSON.stringify({}) });
+    remoteConfig = {};
+    remoteCoexistenceSetup = null;
     await syncFromServer();
     render();
     toast("Meta revisado, webhooks suscritos y COEX sincronizado");
@@ -3528,18 +3601,41 @@ function metaControlToast(result) {
   return "Cambio aplicado en Meta";
 }
 
+function getActiveView() {
+  return document.querySelector(".nav-item.active")?.dataset.view || "dashboard";
+}
+
+function renderActiveView(view = getActiveView()) {
+  if (view === "dashboard") {
+    renderRangeForm();
+    renderMetrics();
+    renderPerformance();
+    renderRecentSales();
+    return;
+  }
+  if (view === "crm") {
+    renderCrm();
+    return;
+  }
+  if (view === "sales") {
+    renderAdIdOptions();
+    renderSalesTable();
+    return;
+  }
+  if (view === "leads") {
+    renderLeadsTable();
+    return;
+  }
+  if (view === "ads") {
+    renderSpendTable();
+    return;
+  }
+  if (view === "settings") fillRules();
+}
+
 function render() {
   applyRoleAccess();
-  renderRangeForm();
-  renderMetrics();
-  renderCrm();
-  renderAdIdOptions();
-  renderPerformance();
-  renderRecentSales();
-  renderSalesTable();
-  renderLeadsTable();
-  renderSpendTable();
-  fillRules();
+  renderActiveView();
   applyRoleAccess();
 }
 
@@ -3703,8 +3799,9 @@ function renderLeadsTable() {
     return;
   }
 
-  tbody.innerHTML = [...state.leads]
-    .sort((a, b) => new Date(b.date) - new Date(a.date))
+  const sortedLeads = [...state.leads].sort((a, b) => new Date(b.date) - new Date(a.date));
+  const visibleLeads = sortedLeads.slice(0, 500);
+  tbody.innerHTML = visibleLeads
     .map(
       (lead) => `
         <tr>
@@ -3717,7 +3814,9 @@ function renderLeadsTable() {
         </tr>
       `,
     )
-    .join("");
+    .join("") + (sortedLeads.length > visibleLeads.length
+      ? `<tr><td colspan="6" class="empty">Mostrando los 500 contactos más recientes de ${numberFormat.format(sortedLeads.length)}.</td></tr>`
+      : "");
 }
 
 function renderSpendTable() {
@@ -3768,6 +3867,7 @@ function setView(view) {
     ads: "Anuncios",
     settings: "Datos",
   }[view];
+  renderActiveView(view);
 }
 
 function applyRoleAccess() {
@@ -3897,6 +3997,85 @@ function getConversationLead(conversation) {
   return findLeadForPhone(conversation.phone);
 }
 
+function getConversationMessageState(conversationId) {
+  if (!conversationMessageState.has(conversationId)) {
+    conversationMessageState.set(conversationId, {
+      loaded: false,
+      loading: false,
+      hasMore: false,
+      nextBefore: "",
+      error: "",
+      lastAccess: 0,
+    });
+  }
+  return conversationMessageState.get(conversationId);
+}
+
+async function loadConversationMessages(conversationId, options = {}) {
+  if (!conversationId) return;
+  const meta = getConversationMessageState(conversationId);
+  const older = Boolean(options.older);
+  const force = Boolean(options.force);
+  if (meta.loading || (!older && meta.loaded && !force) || (older && (!meta.loaded || !meta.hasMore))) return;
+
+  meta.loading = true;
+  meta.error = "";
+  meta.lastAccess = Date.now();
+  try {
+    const params = new URLSearchParams({ limit: "200" });
+    if (older && meta.nextBefore) params.set("before", meta.nextBefore);
+    const remoteState = await api(`/api/conversations/${encodeURIComponent(conversationId)}/messages?${params.toString()}`);
+    state.messages = mergeRemoteRows(state.messages, remoteState.messages, ["at"]);
+    if (older || !meta.loaded || !meta.nextBefore) {
+      meta.hasMore = Boolean(remoteState.hasMore);
+      meta.nextBefore = remoteState.nextBefore || "";
+    }
+    meta.loaded = true;
+    pruneConversationMessageCache(conversationId);
+  } catch (error) {
+    meta.error = String(error?.message || "No se pudo cargar el historial");
+    console.error("No se pudo cargar el historial de la conversación", error);
+  } finally {
+    meta.loading = false;
+    if (activeConversationId === conversationId && getActiveView() === "crm") renderCrm();
+  }
+}
+
+function pruneConversationMessageCache(activeId) {
+  const loaded = [...conversationMessageState.entries()]
+    .filter(([, meta]) => meta.loaded)
+    .sort((a, b) => Number(b[1].lastAccess || 0) - Number(a[1].lastAccess || 0));
+  const keep = new Set([activeId, ...loaded.slice(0, 5).map(([id]) => id)]);
+  const removed = new Set();
+  for (const [id] of loaded) {
+    if (keep.has(id)) continue;
+    conversationMessageState.delete(id);
+    removed.add(id);
+  }
+  if (removed.size) {
+    state.messages = (state.messages || []).filter((message) => !removed.has(String(message.conversationId || "")));
+  }
+}
+
+function scheduleConversationSearch() {
+  clearTimeout(crmSearchTimer);
+  const requestVersion = ++crmSearchRequestVersion;
+  const query = String(document.getElementById("crmSearch")?.value || "").trim();
+  if (query.length < 2) return;
+  crmSearchTimer = window.setTimeout(async () => {
+    try {
+      const result = await api(`/api/conversations/search?query=${encodeURIComponent(query)}&limit=100`);
+      if (requestVersion !== crmSearchRequestVersion) return;
+      const currentQuery = String(document.getElementById("crmSearch")?.value || "").trim();
+      if (currentQuery !== query) return;
+      mergeRemoteState(result);
+      renderCrm();
+    } catch (error) {
+      if (requestVersion === crmSearchRequestVersion) toast(error.message);
+    }
+  }, 350);
+}
+
 function renderCrm() {
   const list = document.getElementById("conversationList");
   const thread = document.getElementById("messageThread");
@@ -3965,6 +4144,8 @@ function renderCrm() {
   const activeTags = conversationTags(active);
   const activeTagIds = new Set(conversationTagIds(active));
   const availableTags = getCrmTags().filter((tag) => !activeTagIds.has(tag.id));
+  const messageLoad = getConversationMessageState(activeConversationId);
+  messageLoad.lastAccess = Date.now();
   const messages = [...(state.messages || [])]
     .filter((message) => message.conversationId === activeConversationId)
     .sort((a, b) => new Date(a.at || 0) - new Date(b.at || 0));
@@ -3972,7 +4153,7 @@ function renderCrm() {
     <div class="thread-title-row">
       <div>
         <h2>${escapeHtml(getConversationDisplayName(active))}</h2>
-        <p>${getChannelLabel(active.channel)}${active.phone ? ` · ${escapeHtml(active.phone)}` : ""}${activeAttribution ? ` · ${escapeHtml(activeAttribution.ad || activeAttribution.campaign)}` : ""} · ${messages.length} mensajes</p>
+        <p>${getChannelLabel(active.channel)}${active.phone ? ` · ${escapeHtml(active.phone)}` : ""}${activeAttribution ? ` · ${escapeHtml(activeAttribution.ad || activeAttribution.campaign)}` : ""} · ${messageLoad.loaded ? `${messages.length} mensajes cargados` : "Cargando historial"}</p>
       </div>
       <button class="secondary-button compact" data-open-sale-from-conversation type="button">Registrar venta</button>
     </div>
@@ -4016,7 +4197,21 @@ function renderCrm() {
     </div>
   `;
 
-  thread.innerHTML = messages.length
+  if (!messageLoad.loaded) {
+    thread.innerHTML = messageLoad.error
+      ? `<div class="empty">${escapeHtml(messageLoad.error)}<br /><button class="secondary-button compact" data-retry-message-history type="button">Reintentar</button></div>`
+      : `<div class="empty">Cargando mensajes...</div>`;
+    thread.dataset.conversationId = activeConversationId;
+    if (!messageLoad.loading && !messageLoad.error) loadConversationMessages(activeConversationId).catch(() => {});
+    return;
+  }
+
+  const historyControl = messageLoad.error
+    ? `<div class="thread-history-action"><span>${escapeHtml(messageLoad.error)}</span><button class="secondary-button compact" data-retry-message-history type="button">Reintentar</button></div>`
+    : messageLoad.hasMore
+      ? `<div class="thread-history-action"><button class="secondary-button compact" data-load-older-messages type="button" ${messageLoad.loading ? "disabled" : ""}>${messageLoad.loading ? "Cargando..." : "Cargar mensajes anteriores"}</button></div>`
+      : "";
+  thread.innerHTML = historyControl + (messages.length
     ? messages
         .map(
           (message) => `
@@ -4028,7 +4223,7 @@ function renderCrm() {
           `,
         )
         .join("")
-    : `<div class="empty">Todavía no hay mensajes guardados.</div>`;
+    : `<div class="empty">Todavía no hay mensajes guardados.</div>`);
   thread.dataset.conversationId = activeConversationId;
   if (previousThreadConversationId !== activeConversationId || threadWasNearBottom) {
     thread.scrollTop = thread.scrollHeight;
@@ -4387,9 +4582,10 @@ async function confirmRemoteSaleSaved(sale, options = {}) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (attempt > 0) await wait(delayMs * attempt);
     try {
-      const remoteState = await api("/api/state");
+      const remoteState = await api("/api/state?compact=1");
       serverAvailable = true;
       mergeRemoteState(remoteState);
+      lastCompactSyncAt = remoteState.serverTime || lastCompactSyncAt;
       saveState();
       if (saleExistsInState(sale)) return true;
     } catch {
@@ -4623,12 +4819,20 @@ function applyRemoteState(remoteState) {
 }
 
 function mergeRemoteState(remoteState = {}) {
+  const deletedCollection = String(remoteState.deleted?.collection || "");
+  const deletedId = String(remoteState.deleted?.id || "");
+  if (deletedCollection && deletedId && Array.isArray(state[deletedCollection])) {
+    state[deletedCollection] = state[deletedCollection].filter((item) => String(item?.id || "") !== deletedId);
+  }
+  const partial = remoteState.partial === true;
   state.conversations = mergeRemoteRows(state.conversations, remoteState.conversations, ["updatedAt", "lastAt"]);
   state.messages = mergeRemoteRows(state.messages, remoteState.messages, ["at"]);
-  state.sales = Array.isArray(remoteState.sales) ? remoteState.sales : state.sales;
-  state.leads = Array.isArray(remoteState.leads) ? remoteState.leads : state.leads;
-  state.spend = Array.isArray(remoteState.spend) ? remoteState.spend : state.spend;
-  state.ads = Array.isArray(remoteState.ads) ? remoteState.ads : state.ads;
+  for (const collection of ["sales", "leads", "spend", "ads"]) {
+    if (!Array.isArray(remoteState[collection])) continue;
+    state[collection] = partial
+      ? mergeRemoteRows(state[collection], remoteState[collection], ["updatedAt", "date"])
+      : remoteState[collection];
+  }
   state.crmTags = Array.isArray(remoteState.crmTags) ? remoteState.crmTags : state.crmTags;
   state.campaignPeriods = Array.isArray(remoteState.campaignPeriods) ? remoteState.campaignPeriods : state.campaignPeriods;
   state.rules = remoteState.rules || state.rules;
@@ -4937,11 +5141,27 @@ document.addEventListener("click", (event) => {
     return;
   }
 
-  const conversationButton = event.target.closest("[data-conversation-id]");
+  const conversationButton = event.target.closest(".conversation-item[data-conversation-id]");
   if (conversationButton) {
     activeConversationId = conversationButton.dataset.conversationId;
     renderCrm();
     focusReplyComposer();
+    return;
+  }
+
+  const loadOlderButton = event.target.closest("[data-load-older-messages]");
+  if (loadOlderButton) {
+    loadConversationMessages(activeConversationId, { older: true }).catch(() => {});
+    renderCrm();
+    return;
+  }
+
+  const retryHistoryButton = event.target.closest("[data-retry-message-history]");
+  if (retryHistoryButton) {
+    const meta = getConversationMessageState(activeConversationId);
+    meta.error = "";
+    loadConversationMessages(activeConversationId, { older: meta.loaded && meta.hasMore }).catch(() => {});
+    renderCrm();
     return;
   }
 
@@ -5009,8 +5229,21 @@ async function deleteRecord(collection, id) {
   }
 }
 
-document.getElementById("exportJson").addEventListener("click", () => {
-  download(`ventas-ads-${today()}.json`, JSON.stringify(state, null, 2), "application/json");
+document.getElementById("exportJson").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Preparando...";
+  try {
+    const exportState = serverAvailable ? await api("/api/state") : state;
+    download(`ventas-ads-${today()}.json`, JSON.stringify(exportState, null, 2), "application/json");
+    toast(serverAvailable ? "Exportación completa lista" : "Exportación local lista");
+  } catch (error) {
+    toast(`No se pudo exportar: ${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
 });
 
 document.getElementById("exportSalesCsv").addEventListener("click", () => {
@@ -5042,6 +5275,7 @@ document.getElementById("crmTagFilter").addEventListener("change", () => {
 document.getElementById("crmSearch").addEventListener("input", () => {
   activeConversationId = "";
   renderCrm();
+  scheduleConversationSearch();
 });
 
 document.getElementById("dashboardRangeForm").addEventListener("submit", async (event) => {
@@ -5205,6 +5439,8 @@ document.getElementById("logoutPanel").addEventListener("click", () => {
   panelCode = "";
   accessRole = "";
   localStorage.removeItem(AUTH_STORAGE_KEY);
+  resetRemoteSessionState({ clearData: true });
+  render();
   showAuthGate();
 });
 
@@ -5216,9 +5452,13 @@ render();
 saveState();
 
 if (!panelCode) showAuthGate();
-syncFromServer().then(render);
+syncFromServer().then((changed) => {
+  if (changed) render();
+});
 setInterval(() => {
-  syncFromServer().then(render);
+  syncFromServer().then((changed) => {
+    if (changed) render();
+  });
 }, 30000);
 
 </script>
