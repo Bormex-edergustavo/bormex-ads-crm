@@ -1902,3 +1902,231 @@ textarea:focus {
 .inbox-connection p { margin: 0 0 8px; overflow-wrap: anywhere; }
 .reply-media-status { margin: 0; font-size: 12px; color: #64748b; }
 .media-error { display: block; padding: 8px; font-size: 12px; color: #b45309; }
+
+/* Inbox: presentation modeled on WhatsApp Web; business controls stay in the contact panel. */
+body[data-view="crm"] {
+  --text: #111b21;
+  --muted: #667781;
+  --border: #e9edef;
+  --primary: #008069;
+  background: #f7f5f3;
+  font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  height: 100dvh;
+  overflow: hidden;
+}
+body[data-view="crm"]::before { display: none; }
+body[data-view="crm"] .app-shell,
+body[data-view="crm"] .app-shell.sidebar-collapsed { grid-template-columns: 64px minmax(0, 1fr); height: 100dvh; min-height: 0; }
+body[data-view="crm"] .sidebar,
+body[data-view="crm"] .app-shell.sidebar-collapsed .sidebar {
+  display: flex; flex-direction: column; align-items: center; gap: 20px; padding: 18px 10px 14px;
+  height: 100dvh; min-height: 0; background: #f0f2f5; border: 0; box-shadow: none; backdrop-filter: none; z-index: 5;
+}
+body[data-view="crm"] .brand,
+body[data-view="crm"] .app-shell.sidebar-collapsed .brand { display: flex; flex-direction: column; gap: 0; width: auto; }
+body[data-view="crm"] .brand > div,
+body[data-view="crm"] .nav-item span,
+body[data-view="crm"] .app-shell.sidebar-collapsed .nav-item span,
+body[data-view="crm"] .sync-chip span,
+body[data-view="crm"] #clearDemoData,
+body[data-view="crm"] #sidebarToggle { display: none; }
+body[data-view="crm"] .brand-mark { display: grid; place-items: center; flex: none; width: 38px; height: 38px; font-size: 15px; border-radius: 50%; background: #d9fdd3; color: #008069; box-shadow: none; }
+body[data-view="crm"] .nav { display: flex; flex-direction: column; width: 100%; gap: 13px; overflow: visible; }
+body[data-view="crm"] .nav-item,
+body[data-view="crm"] .app-shell.sidebar-collapsed .nav-item { display: flex; justify-content: center; flex: none; width: 42px; min-height: 42px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #54656f; box-shadow: none; transform: none; }
+body[data-view="crm"] .nav-item[hidden] { display: none; }
+body[data-view="crm"] .nav-item:hover,
+body[data-view="crm"] .nav-item.active { background: #d9dbdf; color: #111b21; box-shadow: none; }
+body[data-view="crm"] .nav-item svg { width: 23px; height: 23px; }
+body[data-view="crm"] .sidebar-footer { margin-top: auto; width: auto; padding: 0; }
+body[data-view="crm"] .sync-chip { min-height: 32px; padding: 0; border: 0; background: transparent; box-shadow: none; }
+body[data-view="crm"] .sync-chip svg { color: #667781; width: 20px; height: 20px; }
+body[data-view="crm"] .main { min-width: 0; height: 100dvh; min-height: 0; padding: 0; overflow: hidden; }
+body[data-view="crm"] .topbar { display: none; }
+#crmView.active { display: block; height: 100%; min-height: 0; margin: 0; }
+#crmView [hidden] { display: none !important; }
+#crmView button, #crmView input, #crmView textarea, #crmView select { font-family: inherit; }
+#crmView button { font-weight: 400; }
+#crmView input:focus, #crmView textarea:focus, #crmView select:focus { box-shadow: none; outline: 2px solid #008069; outline-offset: -2px; }
+#crmView .crm-shell { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(330px, 31%) minmax(0, 1fr); gap: 0; }
+#crmView .crm-shell.contact-info-open { grid-template-columns: minmax(310px, 29%) minmax(0, 1fr) 320px; }
+#crmView .crm-list-panel, #crmView .crm-thread-panel { min-height: 0; padding: 0; gap: 0; border: 0; border-radius: 0; box-shadow: none; backdrop-filter: none; background: #fff; overflow: hidden; }
+#crmView .crm-list-panel::after, #crmView .crm-thread-panel::after { display: none; }
+#crmView .crm-list-panel { display: grid; grid-template-rows: 72px 48px 44px 42px minmax(0, 1fr); border-right: 1px solid #e9edef; z-index: 3; overflow: visible; }
+#crmView .inbox-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 24px; gap: 12px; }
+#crmView .inbox-heading h2 { margin: 0; color: #111b21; font-size: 24px; font-weight: 700; letter-spacing: -.5px; }
+#crmView .inbox-heading-actions, #crmView .thread-header-actions { display: flex; align-items: center; gap: 10px; }
+#crmView .chat-icon-button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 38px; height: 38px; min-height: 0; padding: 0; border: 0; border-radius: 50%; color: #54656f; background: transparent; box-shadow: none; line-height: 1; }
+#crmView .chat-icon-button:hover { background: #e9edef; color: #111b21; }
+#crmView .chat-icon-button svg { width: 23px; height: 23px; }
+#crmView .chat-popover { position: relative; z-index: 6; }
+#crmView .chat-popover summary { list-style: none; cursor: pointer; }
+#crmView .chat-popover summary::-webkit-details-marker { display: none; }
+#crmView .chat-popover-content { position: absolute; top: calc(100% + 5px); right: 0; width: 270px; max-height: min(440px, 65dvh); overflow: auto; padding: 10px 0; background: #fff; color: #111b21; border: 1px solid #e9edef; border-radius: 12px; box-shadow: 0 4px 24px #0b141a29; z-index: 20; }
+#crmView .chat-popover-content > button { display: block; width: 100%; padding: 12px 20px; border: 0; border-radius: 0; background: transparent; text-align: left; color: #111b21; font-size: 14px; }
+#crmView .chat-popover-content > button:hover { background: #f5f6f6; }
+#crmView .popover-caption { padding: 5px 20px 9px; margin: 0; font-size: 12px; color: #667781; }
+#crmView #socialInboxStatus { padding: 12px 20px 4px; margin: 0; border-top: 1px solid #e9edef; font-size: 12px; line-height: 1.5; color: #667781; }
+#crmView .inbox-search-wrap { position: relative; margin: 0 16px 8px; }
+#crmView .inbox-search-wrap > svg { position: absolute; left: 15px; top: 10px; width: 20px; height: 20px; color: #667781; z-index: 2; pointer-events: none; }
+#crmView .crm-search { width: 100%; height: 40px; min-height: 0; padding: 0 15px 0 48px; background: #f0f2f5; color: #111b21; border: 0; border-radius: 24px; font-size: 14px; font-weight: 400; box-shadow: none; }
+#crmView .crm-search::placeholder { color: #667781; opacity: 1; }
+#crmView .inbox-read-filters { display: flex; gap: 8px; align-items: flex-start; padding: 2px 16px 8px; }
+#crmView .chat-filter-chip { flex: 0 0 auto; min-height: 31px; padding: 5px 13px; border: 1px solid #e4e6e7; border-radius: 20px; background: #fff; color: #54656f; font-size: 14px; box-shadow: none; }
+#crmView .chat-filter-chip.active { color: #008069; background: #d9fdd3; border-color: #d9fdd3; }
+#crmView .crm-filter-row { display: flex; gap: 8px; width: auto; padding: 0 16px 9px; }
+#crmView .crm-filter-row select { min-height: 30px; height: 30px; width: 50%; max-width: 50%; padding: 3px 22px 3px 10px; background-color: #f5f6f6; border: 0; border-radius: 15px; font-size: 12px; color: #54656f; text-overflow: ellipsis; box-shadow: none; }
+#crmView .conversation-list { display: block; min-height: 0; max-height: none; padding: 0 8px 8px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #c6cbcf transparent; }
+#crmView .conversation-item { display: grid; grid-template-columns: 49px minmax(0, 1fr); align-items: center; gap: 13px; width: 100%; min-height: 76px; margin: 0; padding: 12px 12px; border: 0; border-radius: 9px; background: #fff; box-shadow: none; transform: none; transition: background .12s; }
+#crmView .conversation-item:hover { background: #f5f6f6; box-shadow: none; transform: none; }
+#crmView .conversation-item.active { background: #f0f2f5; box-shadow: none; transform: none; }
+#crmView .conversation-content { gap: 5px; overflow: hidden; }
+#crmView .conversation-name-row, #crmView .conversation-preview-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+#crmView .conversation-item strong { flex: 1; min-width: 0; font-size: 16px; line-height: 21px; font-weight: 400; color: #111b21; }
+#crmView .conversation-item.has-unread strong { font-weight: 600; }
+#crmView .conversation-time { flex: 0 0 auto; font-size: 11px; color: #667781; white-space: nowrap; }
+#crmView .has-unread .conversation-time { color: #1daa61; font-weight: 500; }
+#crmView .conversation-item .conversation-preview { display: block; flex: 1; min-height: 0; min-width: 0; font-size: 13px; line-height: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #667781; -webkit-line-clamp: unset; }
+#crmView .channel-indicator { display: inline-flex; align-items: center; flex: 0 0 auto; opacity: .8; }
+#crmView .channel-indicator svg { width: 15px; height: 15px; }
+#crmView .channel-indicator.whatsapp { color: #008069; }
+#crmView .channel-indicator.messenger { color: #6578aa; }
+#crmView .channel-indicator.instagram { color: #ab6682; }
+#crmView .unread-badge { position: static; flex: 0 0 auto; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 12px; font-size: 11px; font-weight: 600; box-shadow: none; background: #25d366; color: #fff; }
+#crmView .conversation-avatar { width: 49px; height: 49px; border: 0; background: #e9edef; color: #85949b; font-size: 20px; font-weight: 500; }
+#crmView .conversation-avatar img { object-fit: cover; }
+#crmView .tag-mini-row { gap: 4px; }
+#crmView .tag-mini { font-size: 10px; font-weight: 500; padding: 2px 6px; }
+#crmView .conversation-due { font-size: 10px; font-weight: 500; }
+#crmView .crm-thread-panel { display: grid; grid-template-areas: "thread-header" "thread-search" "thread-messages" "thread-reply"; grid-template-rows: 64px auto minmax(0, 1fr) auto; z-index: 1; }
+#crmView .thread-header { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 0 18px; border: 0; background: #f0f2f5; z-index: 4; }
+#crmView .thread-contact-button { display: flex; align-items: center; gap: 13px; flex: 1; min-width: 0; padding: 0; background: none; border: 0; text-align: left; color: #111b21; }
+#crmView .thread-contact-button > span:last-child { display: grid; min-width: 0; gap: 4px; }
+#crmView .thread-contact-button strong, #crmView .thread-contact-button small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#crmView .thread-contact-button strong { font-size: 16px; font-weight: 500; }
+#crmView .thread-contact-button small { color: #667781; font-size: 12px; }
+#crmView .thread-contact-button .conversation-avatar { width: 40px; height: 40px; flex: 0 0 40px; font-size: 17px; background: #dfe5e7; }
+#crmView .thread-header-actions { gap: 12px; }
+#crmView .mobile-chat-back { display: none; }
+#crmView .thread-empty-heading { color: #54656f; font-size: 16px; }
+#crmView .thread-search-bar { grid-area: thread-search; display: flex; align-items: center; gap: 8px; background: #fff; padding: 8px 18px; border-bottom: 1px solid #e9edef; }
+#crmView .thread-search-bar > svg { width: 18px; color: #667781; }
+#crmView .thread-search-bar input { flex: 1; width: 100%; min-width: 0; min-height: 36px; border: 0; padding: 7px; font-size: 14px; background: #f5f6f6; border-radius: 8px; }
+#crmView #threadSearchCount { font-size: 11px; color: #667781; white-space: nowrap; }
+#crmView .message-thread { display: flex; flex-direction: column; align-items: stretch; grid-area: thread-messages; gap: 5px; min-height: 0; max-height: none; overflow: auto; border: 0; border-radius: 0; background-color: #efeae2; background-image: url("data:image/svg+xml,%3Csvg width='260' height='220' viewBox='0 0 260 220' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23b8b0a6' stroke-width='1.1' opacity='.2'%3E%3Cpath d='m23 30 25 9-20 7-5-16 8 11 17-2M173 28c-12-14-26 6-12 13l12 9 12-9c14-7 0-27-12-13ZM66 142c-17 0-25 20-10 28l-6 11 17-6c23 4 30-29-1-33ZM210 154l9-14 9 14-9 14Z'/%3E%3Ccircle cx='116' cy='76' r='12'/%3E%3Cpath d='m116 56 0-6m0 52v-6m-20-20h-6m52 0h-6M26 106q18-24 35 0M29 112q14-17 29 0m79 72q5-31 25-32-2 21-25 32Zm0 0 14-17M225 63l-15 7 15 7 15-7Z'/%3E%3C/g%3E%3C/svg%3E"); padding: 24px clamp(24px, 5.5vw, 88px) 20px; scrollbar-width: thin; scrollbar-color: #b7b2aa transparent; }
+#crmView .message-date-divider { align-self: center; padding: 13px 0 10px; }
+#crmView .message-date-divider span { display: block; border-radius: 7px; padding: 5px 12px; background: #fff; color: #54656f; font-size: 11px; box-shadow: 0 1px 1px #0b141a15; text-transform: uppercase; }
+#crmView .message-bubble { position: relative; flex: 0 0 auto; max-width: min(660px, 84%); min-width: 65px; padding: 7px 9px 5px; border: 0; border-radius: 8px; box-shadow: 0 1px 1px #0b141a20; color: #111b21; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+#crmView .message-bubble.inbound { align-self: flex-start; background: #fff; border-top-left-radius: 0; }
+#crmView .message-bubble.outbound { align-self: flex-end; background: #d9fdd3; border-top-right-radius: 0; }
+#crmView .message-bubble::before { position: absolute; content: ""; top: 0; width: 0; height: 0; border: 6px solid transparent; border-top: 6px solid #fff; }
+#crmView .message-bubble.inbound::before { left: -6px; }
+#crmView .message-bubble.outbound::before { right: -6px; border-top-color: #d9fdd3; }
+#crmView .message-bubble p { margin: 0; font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
+#crmView .message-meta { display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin: 3px 0 0 24px; color: #667781; font-size: 10px; line-height: 14px; }
+#crmView .message-receipt { display: inline-flex; opacity: 1; }
+#crmView .message-receipt svg { width: 16px; height: 14px; }
+#crmView .message-receipt.is-read { color: #53bdeb; }
+#crmView .message-bubble.is-search-match { outline: 2px solid #e8b328; outline-offset: 2px; }
+#crmView .message-media-link, #crmView .message-video-card { max-width: min(340px, 100%); }
+#crmView .message-media-link img { max-height: 320px; object-fit: contain; }
+#crmView video { max-width: min(340px, 100%); max-height: 340px; background: #111b21; border-radius: 6px; }
+#crmView .attachment-list { gap: 5px; }
+#crmView .message-file-link { background: #0b141a08; color: #111b21; font-size: 13px; }
+#crmView .message-audio-card { width: min(300px, 100%); background: transparent; }
+#crmView .thread-history-action { flex: 0 0 auto; justify-content: center; gap: 8px; padding: 8px; }
+#crmView .thread-history-action button { color: #008069; border: 0; border-radius: 16px; background: #fff; font-size: 12px; font-weight: 500; padding: 7px 13px; box-shadow: 0 1px 2px #0b141a16; }
+#crmView .chat-welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100%; padding: 30px; text-align: center; color: #667781; }
+#crmView .chat-welcome svg { width: 74px; height: 74px; stroke-width: 1; color: #008069; margin-bottom: 20px; }
+#crmView .chat-welcome h2 { margin: 0 0 12px; color: #41525d; font-size: 25px; font-weight: 300; }
+#crmView .chat-welcome p { max-width: 360px; font-size: 14px; line-height: 1.6; }
+#crmView .reply-box { position: relative; grid-area: thread-reply; display: block; padding: 10px 16px; border: 0; background: #f0f2f5; backdrop-filter: none; z-index: 5; }
+#crmView .composer-pill { display: flex; align-items: flex-end; gap: 3px; padding: 5px 7px; background: #fff; border: 1px solid #fff; border-radius: 30px; }
+#crmView .composer-pill > .chat-popover { align-self: flex-end; }
+#crmView .composer-pill .chat-icon-button { width: 35px; height: 38px; }
+#crmView .composer-pill textarea { display: block; flex: 1; min-width: 0; width: 0; min-height: 38px; max-height: 120px; height: 38px; resize: none; padding: 9px 7px; border: 0; border-radius: 0; box-shadow: none; background: transparent; color: #111b21; font-size: 14px; line-height: 20px; scrollbar-width: thin; }
+#crmView .composer-pill textarea:focus { outline: 0; }
+#crmView .composer-pill:focus-within { border-color: #c3ddd4; }
+#crmView .composer-pill textarea::placeholder { color: #667781; }
+#crmView #sendApiButton { flex: 0 0 38px; display: grid; place-items: center; width: 38px; height: 38px; min-height: 0; padding: 0; margin: 0; border: 0; border-radius: 50%; background: #008069; box-shadow: none; font-size: 0; color: #fff; }
+#crmView #sendApiButton::after { content: ""; width: 21px; height: 21px; background: currentColor; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M2.2 3.1 22 12 2.2 20.9l-.1-7.1L15.8 12 2.1 10.2Z'/%3E%3C/svg%3E") center / contain no-repeat; }
+#crmView #sendApiButton:hover { background: #006b58; }
+#crmView .reply-box.is-sending #sendApiButton::after { width: 18px; height: 18px; border: 2px solid #ffffff70; border-top-color: white; border-radius: 50%; background: transparent; mask: none; animation: crm-spin .8s linear infinite; }
+@keyframes crm-spin { to { transform: rotate(360deg); } }
+#crmView .reply-box .chat-popover-content { top: auto; bottom: calc(100% + 14px); right: auto; left: 0; width: 270px; }
+#crmView .composer-attachments label { display: grid; gap: 8px; margin: 8px 16px; font-size: 13px; color: #54656f; }
+#crmView .composer-attachments select { width: 100%; min-height: 36px; padding: 7px 10px; border: 1px solid #e9edef; border-radius: 8px; background: #f5f6f6; box-shadow: none; font-size: 14px; }
+#crmView .attachment-picker { position: relative; border-radius: 8px; padding: 12px; background: #e7fce3; color: #008069 !important; font-weight: 500; cursor: pointer; overflow: hidden; }
+#crmView .attachment-picker input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+#crmView .reply-media-status { padding: 8px 16px; margin: 0; line-height: 1.5; color: #667781; font-size: 12px; }
+#crmView .reply-file-preview { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 10px; padding: 6px 12px; border: 1px solid #d7e3da; border-radius: 10px; color: #111b21; background: #e5f5df; font-size: 13px; overflow-wrap: anywhere; }
+#crmView .reply-file-preview small { margin-left: 8px; color: #667781; font-size: 11px; }
+#crmView .reply-box .emoji-picker { display: grid; grid-template-columns: repeat(4, 1fr); width: 230px; padding: 10px; }
+#crmView .emoji-picker > button { padding: 9px; border-radius: 7px; text-align: center; font-size: 24px; line-height: 1; }
+#crmView .crm-contact-panel { display: block; min-width: 0; height: 100%; overflow: auto; background: #f0f2f5; border-left: 1px solid #d9dfe3; scrollbar-width: thin; }
+#crmView .contact-panel-heading { display: flex; align-items: center; gap: 12px; height: 64px; padding: 0 12px; background: #f0f2f5; }
+#crmView .contact-panel-heading h2 { margin: 0; color: #111b21; font-size: 14px; font-weight: 500; }
+#crmView .contact-profile { background: #fff; padding: 28px 20px 24px; text-align: center; }
+#crmView .contact-profile .conversation-avatar { width: 90px; height: 90px; font-size: 36px; }
+#crmView .contact-profile h3 { margin: 15px 0 7px; color: #111b21; font-size: 21px; font-weight: 400; overflow-wrap: anywhere; }
+#crmView .contact-profile p { margin: 0; color: #667781; font-size: 13px; }
+#crmView .contact-commercial-section { background: #fff; margin-top: 10px; padding: 22px; }
+#crmView .contact-commercial-section h3 { margin: 0 0 18px; color: #008069; font-size: 14px; font-weight: 500; }
+#crmView .contact-sale-button { display: flex; align-items: center; gap: 10px; border: 0; border-radius: 8px; padding: 10px 12px; color: #008069; background: #e7fce3; font-size: 14px; }
+#crmView .contact-sale-button svg { width: 20px; height: 20px; }
+#crmView .contact-attribution { margin-top: 20px; padding-top: 14px; border-top: 1px solid #e9edef; }
+#crmView .contact-attribution small { color: #008069; font-size: 12px; }
+#crmView .contact-attribution p { margin: 7px 0 0; color: #54656f; line-height: 1.5; font-size: 13px; }
+#crmView .contact-history-count { color: #8696a0; font-size: 12px; margin: 18px 0; }
+#crmView .thread-action-grid { display: grid; grid-template-columns: 1fr; gap: 24px; margin: 0; }
+#crmView .contact-name-form, #crmView .tag-create-inline, #crmView .inline-control { display: grid; grid-template-columns: 1fr; gap: 8px; }
+#crmView .contact-name-form input, #crmView .tag-create-inline input, #crmView .tag-create-inline select, #crmView .inline-control select { width: 100%; min-height: 38px; padding: 9px 10px; border: 1px solid #d9dfe3; border-radius: 7px; background: #fff; color: #111b21; font-size: 13px; font-weight: 400; box-shadow: none; }
+#crmView .contact-name-form button, #crmView .tag-create-inline button, #crmView .inline-control button { justify-self: start; min-height: 34px; margin: 0; padding: 8px 12px; border: 0; border-radius: 20px; background: #e7fce3; color: #008069; font-size: 12px; font-weight: 500; box-shadow: none; }
+#crmView .tag-control { gap: 14px; }
+#crmView .tag-chip { font-size: 12px; font-weight: 500; padding: 5px 10px; }
+#crmView .tag-chip::after { content: " ×"; }
+#crmView .empty { color: #667781; font-size: 13px; line-height: 1.6; padding: 25px; }
+@media (max-width: 1120px) and (min-width: 761px) {
+  #crmView .crm-shell { grid-template-columns: 330px minmax(0, 1fr); }
+  #crmView .crm-shell.contact-info-open { grid-template-columns: 300px minmax(0, 1fr); }
+  #crmView .crm-contact-panel { position: absolute; inset: 0 0 0 auto; width: 320px; z-index: 8; box-shadow: -8px 0 30px #0b141a20; }
+  #crmView .thread-header-actions { gap: 2px; }
+  #crmView .message-thread { padding-left: 24px; padding-right: 24px; }
+}
+@media (max-width: 760px) {
+  body[data-view="crm"] .app-shell, body[data-view="crm"] .app-shell.sidebar-collapsed { grid-template-columns: 54px minmax(0, 1fr); }
+  body[data-view="crm"] .sidebar, body[data-view="crm"] .app-shell.sidebar-collapsed .sidebar { padding: 14px 6px; }
+  body[data-view="crm"] .nav { display: flex; flex-direction: column; }
+  body[data-view="crm"] .brand-mark { display: grid; place-items: center; flex: none; width: 34px; height: 34px; }
+  #crmView .crm-shell, #crmView .crm-shell.contact-info-open { display: block; position: relative; height: 100%; }
+  #crmView .crm-list-panel { height: 100%; grid-template-rows: 64px 48px 44px 42px minmax(0, 1fr); }
+  #crmView .crm-thread-panel { display: none; height: 100%; }
+  #crmView .crm-shell.thread-open .crm-list-panel { display: none; }
+  #crmView .crm-shell.thread-open .crm-thread-panel { display: grid; }
+  #crmView .inbox-heading { padding: 0 16px; }
+  #crmView .thread-header { padding: 0 7px; gap: 2px; }
+  #crmView .thread-header-actions { gap: 0; }
+  #crmView .thread-header-actions .chat-icon-button { width: 32px; }
+  #crmView .thread-contact-button { gap: 7px; }
+  #crmView .thread-contact-button strong { font-size: 14px; }
+  #crmView .thread-contact-button small { font-size: 10px; }
+  #crmView .thread-contact-button .conversation-avatar { width: 33px; height: 33px; flex-basis: 33px; }
+  #crmView .mobile-chat-back { display: inline-flex; width: 26px; }
+  #crmView .message-thread { padding: 10px 16px 14px; }
+  #crmView .message-bubble { max-width: 92%; }
+  #crmView .reply-box { padding: 8px; }
+  #crmView .composer-pill { padding: 4px; }
+  #crmView .composer-pill .chat-icon-button { width: 29px; }
+  #crmView .composer-pill textarea { font-size: 14px; padding-left: 4px; }
+  #crmView .crm-contact-panel { position: absolute; inset: 0; width: 100%; z-index: 10; border: 0; }
+  #crmView .contact-name-form, #crmView .inline-control { grid-template-columns: minmax(0, 1fr) auto; }
+  #crmView .thread-search-bar { padding: 8px; }
+  #crmView #threadSearchCount { font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #crmView *, #crmView *::after { animation: none !important; scroll-behavior: auto !important; }
+}
+
+#crmView .conversation-avatar > svg { width: 29px; height: 29px; color: #aab5bb; fill: #aab5bb; stroke: #e9edef; stroke-width: 1.2; }
+#crmView .thread-contact-button .conversation-avatar > svg { width: 25px; height: 25px; }
+#crmView .contact-profile .conversation-avatar > svg { width: 58px; height: 58px; }

@@ -56,6 +56,8 @@ let saleSaveInFlight = false;
 let lastCompactSyncAt = "";
 let remoteCoexistenceSetup = null;
 let crmSearchTimer = null;
+let crmContactInfoOpen = false;
+let crmMobileThreadOpen = false;
 let crmSearchRequestVersion = 0;
 const conversationMessageState = new Map();
 const mediaObjectUrlCache = new Map();
@@ -1503,6 +1505,7 @@ function fillRules() {
 
 function setView(view) {
   if (!isSalesRoleViewAllowed(view)) view = "sales";
+  document.body.dataset.view = view;
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === view);
   });
@@ -1527,6 +1530,7 @@ function applyRoleAccess() {
     button.hidden = salesOnly && !["crm", "sales"].includes(button.dataset.view);
   });
   document.getElementById("exportJson").hidden = salesOnly;
+  document.querySelector("[data-crm-export]").hidden = salesOnly;
   document.getElementById("clearDemoData").hidden = salesOnly;
   document.getElementById("roleBadge").textContent = salesOnly ? "Ventas + CRM" : "Ads";
   if (salesOnly) {
@@ -1541,6 +1545,64 @@ function getChannelLabel(channel) {
     messenger: "Messenger",
     instagram: "Instagram",
   }[channel] || channel;
+}
+
+
+function crmIcon(name) {
+  const paths = {
+    back: '<path d="m15 18-6-6 6-6"/>',
+    search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/>',
+    more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
+    sale: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z"/><path d="M9 7h6M9 11h6M9 15h3"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4 22v-2a8 8 0 0 1 16 0v2"/>',
+    close: '<path d="m6 6 12 12M18 6 6 18"/>',
+    check: '<path d="m4 12 5 5L20 6"/>',
+    checks: '<path d="m2 12 5 5L18 6M12 16l2 2L24 7"/>',
+    channel: '<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2v-8.5A8.5 8.5 0 0 1 10.5 5H13a8 8 0 0 1 8 6.5Z"/><path d="M7 10h9M7 14h6"/>',
+  };
+  return `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.channel}</svg>`;
+}
+
+function formatChatListTime(value) {
+  const date = new Date(value || "");
+  if (!Number.isFinite(date.getTime())) return "";
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) return date.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  return date.toDateString() === yesterday.toDateString() ? "Ayer" : date.toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "2-digit" });
+}
+
+function chatPreviewText(value) {
+  return String(value || "").replace(/\[(image|video|audio|document|sticker|archivo)\]/gi, (_,type) => ({image:"Foto",video:"Video",audio:"Audio",document:"Documento",sticker:"Sticker",archivo:"Archivo"})[type.toLowerCase()]);
+}
+
+function updateCrmPanels() {
+  const shell = document.querySelector(".crm-shell");
+  shell.classList.toggle("contact-info-open", crmContactInfoOpen);
+  shell.classList.toggle("thread-open", crmMobileThreadOpen);
+  document.getElementById("crmContactPanel").hidden = !crmContactInfoOpen;
+  document.querySelectorAll("[data-toggle-contact-info]").forEach(button => button.setAttribute("aria-expanded", String(crmContactInfoOpen)));
+}
+
+function renderReplyFilePreview() {
+  const form = document.getElementById("replyForm");
+  const file = form.elements.mediaFile.files?.[0];
+  const preview = document.getElementById("replyFilePreview");
+  preview.hidden = !file;
+  preview.innerHTML = file ? `<span>${escapeHtml(file.name)} <small>${formatBytes(file.size)}</small></span><button class="chat-icon-button" type="button" data-remove-reply-file aria-label="Quitar archivo">${crmIcon("close")}</button>` : "";
+  form.elements.text.style.height = "auto";
+}
+
+function highlightThreadSearch(scrollToMatch = true) {
+  const query = document.getElementById("threadSearch").value.trim().toLocaleLowerCase("es-MX");
+  const bubbles = [...document.querySelectorAll("#messageThread .message-bubble")];
+  const matches = bubbles.filter(bubble => {
+    const match = Boolean(query && bubble.textContent.toLocaleLowerCase("es-MX").includes(query));
+    bubble.classList.toggle("is-search-match", match);
+    return match;
+  });
+  document.getElementById("threadSearchCount").textContent = query ? `${matches.length} coincidencias` : "";
+  if (scrollToMatch && matches.length) matches[0].scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
 function getConversationDisplayName(conversation) {
@@ -1576,7 +1638,7 @@ function renderConversationAvatar(conversation) {
       </span>
     `;
   }
-  return `<span class="conversation-avatar ${channel}" aria-hidden="true">${escapeHtml(getConversationInitial(conversation))}</span>`;
+  return `<span class="conversation-avatar ${channel}" aria-hidden="true">${crmIcon("user")}</span>`;
 }
 
 function getConversationSearchText(conversation) {
@@ -1727,6 +1789,11 @@ function scheduleConversationSearch() {
 }
 
 function renderCrm() {
+  document.querySelectorAll("[data-read-filter]").forEach(button => {
+    const selected = button.dataset.readFilter === document.getElementById("crmUnreadFilter").value;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
   renderSocialInboxStatus();
   const list = document.getElementById("conversationList");
   const thread = document.getElementById("messageThread");
@@ -1752,38 +1819,24 @@ function renderCrm() {
         const due = conversationDueStatus(conversation);
         const unreadCount = Math.max(0, Number(conversation.unread || 0));
         return `
-          <button class="conversation-item ${conversation.id === activeConversationId ? "active" : ""} ${unreadCount ? "has-unread" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button">
+          <button class="conversation-item ${conversation.id === activeConversationId ? "active" : ""} ${unreadCount ? "has-unread" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button" aria-current="${conversation.id === activeConversationId ? "true" : "false"}" ${attribution ? `title="${escapeHtml(attribution.ad || attribution.campaign || "Anuncio atribuido")}"` : ""}>
             ${renderConversationAvatar(conversation)}
-            ${unreadCount ? `<span class="unread-badge" aria-label="${unreadCount} mensajes por contestar">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}
             <span class="conversation-content">
-              <span class="conversation-meta-row">
-                <span class="channel-pill ${escapeHtml(conversation.channel)}">${getChannelLabel(conversation.channel)}</span>
-              </span>
-              <strong>${escapeHtml(getConversationDisplayName(conversation))}</strong>
-              <small class="conversation-preview">${escapeHtml(conversation.lastMessage || "")}</small>
-              ${attribution ? `<small class="conversation-attribution">${escapeHtml(attribution.ad || attribution.campaign || "Anuncio atribuido")}</small>` : ""}
-              ${due ? `<small class="conversation-due ${due === "Vencido" ? "is-due" : ""}">${escapeHtml(due)}</small>` : ""}
-              ${
-                tags.length
-                  ? `<span class="tag-mini-row">${tags.slice(0, 3).map((tag) => `<span class="tag-mini" style="--tag-color:${escapeHtml(tag.color)}">${escapeHtml(tag.name)}</span>`).join("")}</span>`
-                  : ""
-              }
+              <span class="conversation-name-row"><strong>${escapeHtml(getConversationDisplayName(conversation))}</strong><time class="conversation-time">${escapeHtml(formatChatListTime(conversation.lastAt))}</time></span>
+              <span class="conversation-preview-row"><span class="channel-indicator ${escapeHtml(conversation.channel)}" title="${getChannelLabel(conversation.channel)}" aria-label="${getChannelLabel(conversation.channel)}">${crmIcon("channel")}</span><small class="conversation-preview">${escapeHtml(chatPreviewText(conversation.lastMessage))}</small>${unreadCount ? `<span class="unread-badge" aria-label="${unreadCount} mensajes por contestar">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}</span>
+              ${due || tags.length ? `<span class="tag-mini-row">${due ? `<span class="conversation-due ${due === "Vencido" ? "is-due" : ""}">${escapeHtml(due)}</span>` : ""}${tags.slice(0, 2).map(tag => `<span class="tag-mini" style="--tag-color:${escapeHtml(tag.color)}">${escapeHtml(tag.name)}</span>`).join("")}</span>` : ""}
             </span>
-          </button>
-        `;
+          </button>`;
       })
       .join("");
   }
 
   const active = conversations.find((conversation) => conversation.id === activeConversationId);
   if (!active) {
-    header.innerHTML = `
-      <div>
-        <h2>Selecciona una conversación</h2>
-        <p>Los mensajes nuevos aparecerán aquí cuando llegue el webhook.</p>
-      </div>
-    `;
-    thread.innerHTML = `<div class="empty">Sin conversación seleccionada.</div>`;
+    header.innerHTML = `<div class="thread-empty-heading">Bormex CRM</div>`;
+    thread.innerHTML = `<div class="chat-welcome">${crmIcon("channel")}<h2>Tus conversaciones, en un solo lugar</h2><p>Selecciona un chat para ver los mensajes de WhatsApp, Messenger o Instagram.</p></div>`;
+    crmContactInfoOpen = false;
+    updateCrmPanels();
     document.getElementById("replyForm").classList.add("disabled");
     updateReplyActions(null);
     return;
@@ -1800,17 +1853,29 @@ function renderCrm() {
   const messages = [...(state.messages || [])]
     .filter((message) => message.conversationId === activeConversationId)
     .sort((a, b) => new Date(a.at || 0) - new Date(b.at || 0));
-  header.innerHTML = `
-    <div class="thread-title-row">
-      <div>
-        <h2>${escapeHtml(getConversationDisplayName(active))}</h2>
-        <p>${getChannelLabel(active.channel)}${active.phone ? ` · ${escapeHtml(active.phone)}` : ""}${activeAttribution ? ` · ${escapeHtml(activeAttribution.ad || activeAttribution.campaign)}` : ""} · ${messageLoad.loaded ? `${messages.length} mensajes cargados` : "Cargando historial"}</p>
-      </div>
-      <button class="secondary-button compact" data-open-sale-from-conversation type="button">Registrar venta</button>
-    </div>
+  if (!header.contains(document.activeElement) || previousThreadConversationId !== activeConversationId) {
+    header.innerHTML = `
+      <button class="chat-icon-button mobile-chat-back" data-back-to-chats type="button" aria-label="Volver a chats">${crmIcon("back")}</button>
+      <button class="thread-contact-button" data-toggle-contact-info type="button" title="Información del contacto">
+        ${renderConversationAvatar(active)}
+        <span><strong>${escapeHtml(getConversationDisplayName(active))}</strong><small>${getChannelLabel(active.channel)}${active.phone ? ` · ${escapeHtml(active.phone)}` : ""}</small></span>
+      </button>
+      <div class="thread-header-actions">
+        <button class="chat-icon-button" data-open-sale-from-conversation type="button" title="Registrar venta" aria-label="Registrar venta">${crmIcon("sale")}</button>
+        <button class="chat-icon-button" data-toggle-thread-search type="button" title="Buscar en la conversación" aria-label="Buscar en la conversación">${crmIcon("search")}</button>
+        <button class="chat-icon-button" data-toggle-contact-info type="button" title="Información del contacto" aria-label="Información del contacto" aria-expanded="${crmContactInfoOpen}">${crmIcon("more")}</button>
+      </div>`;
+  }
+  const contactContent = document.getElementById("crmContactContent");
+  if (!contactContent.contains(document.activeElement) || contactContent.dataset.conversationId !== activeConversationId) {
+    contactContent.innerHTML = `
+      <div class="contact-profile">${renderConversationAvatar(active)}<h3>${escapeHtml(getConversationDisplayName(active))}</h3><p>${getChannelLabel(active.channel)}${active.phone ? ` · ${escapeHtml(active.phone)}` : ""}</p></div>
+      <div class="contact-commercial-section"><h3>Herramientas del CRM</h3><button class="contact-sale-button" data-open-sale-from-conversation type="button">${crmIcon("sale")} Registrar venta</button>
+      ${activeAttribution ? `<div class="contact-attribution"><small>Anuncio de origen</small><p>${escapeHtml(activeAttribution.ad || activeAttribution.campaign)}</p></div>` : ""}
+      <p class="contact-history-count">${messageLoad.loaded ? `${messages.length} mensajes cargados` : "Cargando historial"}</p>
     <div class="thread-action-grid">
       <form class="contact-name-form" data-contact-name-form>
-        <input name="name" placeholder="Nombre del contacto" value="${escapeHtml(getConversationDisplayName(active))}" />
+        <input name="name" aria-label="Nombre del contacto" placeholder="Nombre del contacto" value="${escapeHtml(getConversationDisplayName(active))}" />
         <button class="secondary-button compact" type="submit">Guardar nombre</button>
       </form>
       <div class="tag-control">
@@ -1826,7 +1891,7 @@ function renderCrm() {
           }
         </div>
         <form class="tag-create-inline" data-crm-tag-form>
-          <input name="name" placeholder="Nueva etiqueta" required />
+          <input name="name" aria-label="Nueva etiqueta" placeholder="Nueva etiqueta" required />
           <select name="action" aria-label="Tipo de etiqueta">
             <option value="none">Normal</option>
             <option value="sale">Pago</option>
@@ -1846,7 +1911,11 @@ function renderCrm() {
         </div>
       </div>
     </div>
-  `;
+
+      </div>`;
+    contactContent.dataset.conversationId = activeConversationId;
+  }
+  updateCrmPanels();
 
   if (!messageLoad.loaded) {
     thread.innerHTML = messageLoad.error
@@ -1862,24 +1931,29 @@ function renderCrm() {
     : messageLoad.hasMore
       ? `<div class="thread-history-action"><button class="secondary-button compact" data-load-older-messages type="button" ${messageLoad.loading ? "disabled" : ""}>${messageLoad.loading ? "Cargando..." : "Cargar mensajes anteriores"}</button></div>`
       : "";
+  let previousDay = "";
   thread.innerHTML = historyControl + (messages.length
-    ? messages
-        .map(
-          (message) => `
-            <div class="message-bubble ${message.direction === "outbound" ? "outbound" : "inbound"}">
-              ${message.text ? `<p>${escapeHtml(message.text)}</p>` : ""}
-              ${renderMessageAttachments(message.attachments, message)}
-              <span>${new Date(message.at || Date.now()).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" })}</span>
-            </div>
-          `,
-        )
-        .join("")
+    ? messages.map(message => {
+      const date = new Date(message.at || Date.now());
+      const day = date.toLocaleDateString("es-MX", { year: "numeric", month: "long", day: "numeric" });
+      const divider = day !== previousDay ? `<div class="message-date-divider"><span>${escapeHtml(day)}</span></div>` : "";
+      previousDay = day;
+      const outbound = message.direction === "outbound";
+      const receipt = outbound && ["sent", "delivered", "read"].includes(message.status)
+        ? `<span class="message-receipt ${message.status === "read" ? "is-read" : ""}" aria-label="${{sent:"Enviado",delivered:"Entregado",read:"Leído"}[message.status]}">${crmIcon(message.status === "sent" ? "check" : "checks")}</span>` : "";
+      return `${divider}<div class="message-bubble ${outbound ? "outbound" : "inbound"}">
+        ${message.text && !/^\[(image|video|audio|document|sticker)\]$/i.test(message.text.trim()) ? `<p>${escapeHtml(message.text)}</p>` : ""}
+        ${renderMessageAttachments(message.attachments, message)}
+        <div class="message-meta"><time title="${escapeHtml(date.toLocaleString("es-MX"))}">${date.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}</time>${receipt}</div>
+      </div>`;
+    }).join("")
     : `<div class="empty">Todavía no hay mensajes guardados.</div>`);
   thread.dataset.conversationId = activeConversationId;
   if (previousThreadConversationId !== activeConversationId || threadWasNearBottom) {
     thread.scrollTop = thread.scrollHeight;
   }
   hydrateMediaAttachments(thread);
+  highlightThreadSearch(false);
 }
 
 function updateReplyActions(conversation) {
@@ -1899,13 +1973,15 @@ function updateReplyActions(conversation) {
 
   if (isWhatsApp && !canSendWhatsAppApi) {
     sendApiButton.disabled = true;
-    sendApiButton.textContent = "API Meta sin token";
+    sendApiButton.textContent = "Envío no disponible";
+    sendApiButton.setAttribute("aria-label", "Envío no disponible");
     sendApiButton.title = "Falta configurar WHATSAPP_SEND_ACCESS_TOKEN o WHATSAPP_COEX_ACCESS_TOKEN con permiso whatsapp_business_messaging.";
     return;
   }
 
-  sendApiButton.disabled = !conversation;
-  sendApiButton.textContent = "Enviar API Meta";
+  sendApiButton.disabled = !conversation || document.getElementById("replyForm").classList.contains("is-sending");
+  sendApiButton.textContent = "Enviar mensaje";
+  sendApiButton.setAttribute("aria-label", "Enviar mensaje");
   sendApiButton.title = "";
 }
 
@@ -1913,9 +1989,6 @@ function focusReplyComposer() {
   requestAnimationFrame(() => {
     const form = document.getElementById("replyForm");
     if (!form || form.classList.contains("disabled")) return;
-    if (window.matchMedia("(max-width: 1080px)").matches) {
-      form.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
     form.elements.text?.focus({ preventScroll: true });
   });
 }
@@ -2807,6 +2880,8 @@ document.querySelector("#replyForm input[name='mediaFile']")?.addEventListener("
   const file = event.currentTarget.files?.[0] || null;
   if (!form || !file) return;
   form.elements.mediaType.value = getMediaFileType(file, form.elements.mediaType.value);
+  renderReplyFilePreview();
+  form.querySelector(".composer-attachments").open = false;
 });
 document.getElementById("statusFilter").addEventListener("change", renderPerformance);
 document.getElementById("syncAds").addEventListener("click", syncAdsFromMeta);
@@ -2851,6 +2926,7 @@ document.addEventListener("click", (event) => {
   const conversationButton = event.target.closest(".conversation-item[data-conversation-id]");
   if (conversationButton) {
     activeConversationId = conversationButton.dataset.conversationId;
+    crmMobileThreadOpen = true;
     renderCrm();
     focusReplyComposer();
     return;
@@ -2967,6 +3043,58 @@ document.getElementById("exportSpendCsv").addEventListener("click", () => {
 });
 
 document.getElementById("importCsv").addEventListener("click", importCsv);
+
+document.addEventListener("click", event => {
+  const readFilter = event.target.closest("[data-read-filter]");
+  if (readFilter) {
+    document.getElementById("crmUnreadFilter").value = readFilter.dataset.readFilter;
+    document.getElementById("crmUnreadFilter").dispatchEvent(new Event("change"));
+  }
+  if (event.target.closest("[data-toggle-contact-info]")) {
+    crmContactInfoOpen = !crmContactInfoOpen; updateCrmPanels();
+  }
+  if (event.target.closest("[data-close-contact-info]")) {
+    crmContactInfoOpen = false; updateCrmPanels();
+  }
+  if (event.target.closest("[data-back-to-chats]")) {
+    crmMobileThreadOpen = false; crmContactInfoOpen = false; updateCrmPanels();
+  }
+  if (event.target.closest("[data-crm-export]")) document.getElementById("exportJson").click();
+  if (event.target.closest("[data-crm-logout]")) document.getElementById("logoutPanel").click();
+  const emoji = event.target.closest("[data-reply-emoji]");
+  if (emoji) {
+    const input = document.querySelector('#replyForm textarea');
+    input.setRangeText(emoji.dataset.replyEmoji, input.selectionStart, input.selectionEnd, "end");
+    document.querySelector('.composer-emojis').open = false;
+    input.focus({ preventScroll: true }); input.dispatchEvent(new Event("input"));
+  }
+  if (event.target.closest("[data-remove-reply-file]")) {
+    document.querySelector('#replyForm input[name="mediaFile"]').value = ""; renderReplyFilePreview();
+  }
+  if (event.target.closest("[data-toggle-thread-search]")) {
+    const bar = document.getElementById("threadSearchBar");
+    bar.hidden = !bar.hidden; if (!bar.hidden) document.getElementById("threadSearch").focus();
+  }
+  if (event.target.closest("[data-close-thread-search]")) {
+    document.getElementById("threadSearchBar").hidden = true;
+    document.getElementById("threadSearch").value = ""; highlightThreadSearch(false);
+  }
+  document.querySelectorAll("#crmView .chat-popover[open]").forEach(menu => { if (!menu.contains(event.target)) menu.open = false; });
+});
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape" || getActiveView() !== "crm") return;
+  document.querySelectorAll("#crmView .chat-popover[open]").forEach(menu => menu.open = false);
+  crmContactInfoOpen = false; updateCrmPanels();
+  document.getElementById("threadSearchBar").hidden = true;
+  document.getElementById("threadSearch").value = "";
+  highlightThreadSearch(false);
+});
+document.getElementById("threadSearch").addEventListener("input", () => highlightThreadSearch());
+document.querySelector('#replyForm textarea').addEventListener("input", event => {
+  event.target.style.height = "auto";
+  event.target.style.height = `${Math.min(event.target.scrollHeight, 120)}px`;
+});
+
 document.getElementById("syncSocialInbox")?.addEventListener("click", syncSocialInboxFromPanel);
 document.getElementById("messageThread").addEventListener("error", (event) => {
   const element = event.target;
@@ -3097,6 +3225,7 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
     }
     const remoteState = await api("/api/messages", { method: "POST", body: JSON.stringify(payload) });
     form.reset();
+    renderReplyFilePreview();
     applyRemoteState(remoteState);
     render();
     scheduleFreshSync(1200);

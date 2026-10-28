@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
     <title>Bormex Ads CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20261028-inbox-media" />
+    <link rel="stylesheet" href="styles.css?v=20261028-whatsapp-layout" />
   </head>
   <body>
     <div class="app-shell" id="appShell">
@@ -154,65 +154,81 @@
           </div>
         </section>
 
-        <section class="view" id="crmView">
+        <section class="view" id="crmView" aria-label="Bandeja de conversaciones">
           <section class="crm-shell">
             <div class="crm-list-panel">
-              <div class="panel-header">
-                <div>
-                  <h2>Inbox</h2>
-                  <p>WhatsApp, Messenger e Instagram.</p>
+              <header class="inbox-heading">
+                <h2>Chats</h2>
+                <div class="inbox-heading-actions">
+                  <button class="chat-icon-button" type="button" data-open-sale title="Registrar venta" aria-label="Registrar venta"><i data-lucide="receipt-text"></i></button>
+                  <details class="chat-popover inbox-options">
+                    <summary class="chat-icon-button" title="Menú del CRM" aria-label="Menú del CRM"><i data-lucide="ellipsis-vertical"></i></summary>
+                    <div class="chat-popover-content">
+                      <p class="popover-caption">Bormex CRM</p>
+                      <button id="syncSocialInbox" type="button">Cargar Messenger e Instagram</button>
+                      <button type="button" data-crm-export>Exportar JSON</button>
+                      <button type="button" data-crm-logout>Salir</button>
+                      <p id="socialInboxStatus" role="status">Elige un canal para ver sus conversaciones.</p>
+                    </div>
+                  </details>
                 </div>
-                <div class="crm-filter-row">
-                  <select id="crmChannelFilter" aria-label="Canal">
-                    <option value="all">Todos</option>
-                    <option value="whatsapp">WhatsApp</option>
-                    <option value="messenger">Messenger</option>
-                    <option value="instagram">Instagram</option>
-                  </select>
-                  <select id="crmUnreadFilter" aria-label="Estado de lectura">
-                    <option value="all">Todos</option>
-                    <option value="unread">No leídos</option>
-                    <option value="read">Leídos</option>
-                  </select>
-                  <select id="crmTagFilter" aria-label="Etiqueta">
-                    <option value="all">Todas las etiquetas</option>
-                  </select>
-                </div>
+              </header>
+              <div class="inbox-search-wrap">
+                <i data-lucide="search"></i>
+                <input id="crmSearch" class="crm-search" aria-label="Buscar chats" placeholder="Buscar un chat" autocomplete="off" />
               </div>
-              <input id="crmSearch" class="crm-search" placeholder="Buscar nombre, número o anuncio" />
-              <div class="inbox-connection">
-                <p id="socialInboxStatus" role="status">Elige un canal para ver sus conversaciones.</p>
-                <button class="secondary-button compact" id="syncSocialInbox" type="button">Cargar Messenger e Instagram</button>
+              <div class="inbox-read-filters" aria-label="Filtrar por lectura">
+                <button class="chat-filter-chip active" data-read-filter="all" aria-pressed="true" type="button">Todos</button>
+                <button class="chat-filter-chip" data-read-filter="unread" aria-pressed="false" type="button">No leídos</button>
+                <button class="chat-filter-chip" data-read-filter="read" aria-pressed="false" type="button">Leídos</button>
+                <select id="crmUnreadFilter" aria-label="Estado de lectura" hidden>
+                  <option value="all">Todos</option><option value="unread">No leídos</option><option value="read">Leídos</option>
+                </select>
               </div>
-              <div class="conversation-list" id="conversationList"></div>
+              <div class="crm-filter-row">
+                <select id="crmChannelFilter" aria-label="Canal">
+                  <option value="all">Todos los canales</option><option value="whatsapp">WhatsApp</option><option value="messenger">Messenger</option><option value="instagram">Instagram</option>
+                </select>
+                <select id="crmTagFilter" aria-label="Etiqueta"><option value="all">Todas las etiquetas</option></select>
+              </div>
+              <div class="conversation-list" id="conversationList" aria-label="Conversaciones"></div>
             </div>
-
             <div class="crm-thread-panel">
-              <div class="thread-header" id="threadHeader">
-                <div>
-                  <h2>Selecciona una conversación</h2>
-                  <p>Los mensajes nuevos aparecerán aquí cuando llegue el webhook.</p>
-                </div>
+              <div class="thread-header" id="threadHeader"></div>
+              <div class="thread-search-bar" id="threadSearchBar" hidden>
+                <i data-lucide="search"></i>
+                <input id="threadSearch" type="search" placeholder="Buscar en esta conversación" aria-label="Buscar en esta conversación" />
+                <span id="threadSearchCount" role="status"></span>
+                <button class="chat-icon-button" data-close-thread-search type="button" title="Cerrar búsqueda" aria-label="Cerrar búsqueda"><i data-lucide="x"></i></button>
               </div>
-              <div class="message-thread" id="messageThread"></div>
+              <div class="message-thread" id="messageThread" aria-label="Mensajes"></div>
               <form class="reply-box" id="replyForm">
-                <textarea name="text" rows="2" placeholder="Escribe una respuesta"></textarea>
-                <div class="reply-media-fields">
-                  <select name="mediaType" aria-label="Tipo de adjunto">
-                    <option value="image">Foto</option>
-                    <option value="video">Video</option>
-                    <option value="document">Documento</option>
-                    <option value="audio">Audio</option>
-                  </select>
-                  <input name="mediaFile" type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.mp3,.ogg,.oga,.opus,.wav,.m4a,.aac,.amr,.mp4,.mov,.webm,.m4v,.3gp" />
-                </div>
-                <p id="replyMediaStatus" class="reply-media-status" role="status"></p>
-                <div class="reply-actions">
-                  <button class="primary-button" id="sendApiButton" type="submit">Enviar API Meta</button>
-                  <button class="secondary-button" id="openWhatsAppDraft" type="button">Abrir WhatsApp</button>
+                <div class="reply-file-preview" id="replyFilePreview" hidden></div>
+                <div class="composer-pill">
+                  <details class="chat-popover composer-attachments">
+                    <summary class="chat-icon-button" aria-label="Adjuntar archivo" title="Adjuntar archivo"><i data-lucide="plus"></i></summary>
+                    <div class="chat-popover-content">
+                      <label>Tipo de adjunto<select name="mediaType" aria-label="Tipo de adjunto"><option value="image">Foto</option><option value="video">Video</option><option value="document">Documento</option><option value="audio">Audio</option></select></label>
+                      <label class="attachment-picker">Seleccionar archivo<input name="mediaFile" type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.mp3,.ogg,.oga,.opus,.wav,.m4a,.aac,.amr,.mp4,.mov,.webm,.m4v,.3gp" /></label>
+                      <p id="replyMediaStatus" class="reply-media-status" role="status"></p>
+                      <button id="openWhatsAppDraft" type="button">Abrir WhatsApp</button>
+                    </div>
+                  </details>
+                  <details class="chat-popover composer-emojis">
+                    <summary class="chat-icon-button" aria-label="Emojis" title="Emojis"><i data-lucide="smile"></i></summary>
+                    <div class="chat-popover-content emoji-picker" aria-label="Seleccionar emoji">
+                      <button type="button" data-reply-emoji="😀">😀</button><button type="button" data-reply-emoji="😊">😊</button><button type="button" data-reply-emoji="👍">👍</button><button type="button" data-reply-emoji="🙏">🙏</button><button type="button" data-reply-emoji="❤️">❤️</button><button type="button" data-reply-emoji="🙌">🙌</button><button type="button" data-reply-emoji="✅">✅</button><button type="button" data-reply-emoji="🎉">🎉</button><button type="button" data-reply-emoji="👋">👋</button><button type="button" data-reply-emoji="🤝">🤝</button><button type="button" data-reply-emoji="✨">✨</button><button type="button" data-reply-emoji="📦">📦</button>
+                    </div>
+                  </details>
+                  <textarea name="text" rows="1" aria-label="Escribe un mensaje" placeholder="Escribe un mensaje"></textarea>
+                  <button id="sendApiButton" type="submit" title="Enviar mensaje" aria-label="Enviar mensaje">Enviar mensaje</button>
                 </div>
               </form>
             </div>
+            <aside class="crm-contact-panel" id="crmContactPanel" aria-label="Información del contacto" hidden>
+              <header class="contact-panel-heading"><button class="chat-icon-button" data-close-contact-info type="button" aria-label="Cerrar información del contacto" title="Cerrar"><i data-lucide="x"></i></button><h2>Información del contacto</h2></header>
+              <div id="crmContactContent"></div>
+            </aside>
           </section>
         </section>
 
@@ -452,7 +468,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=20261028-inbox-media"></script>
+    <script src="app.js?v=20261028-whatsapp-layout"></script>
     <script>
       window.lucide?.createIcons();
     </script>

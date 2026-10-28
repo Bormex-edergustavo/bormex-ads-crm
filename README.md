@@ -15,6 +15,17 @@ Dashboard para registrar ventas de WhatsApp y atribuirlas a anuncios por numero 
 
 ## Desarrollo local
 
+## Bandeja con distribución de WhatsApp Web (28-oct-2026)
+
+La sección CRM ocupa la ventana: lista de chats y filtros a la izquierda,
+conversación al centro y respuesta fija abajo. En pantallas pequeñas se alternan
+lista y conversación con la flecha de regreso. El encabezado del contacto abre
+su panel de nombre, etiquetas, anuncio de origen y registro de venta.
+El menú de Chats conserva la carga de Messenger/Instagram, la exportación según
+el rol y la salida. El botón + del mensaje abre archivos y el acceso a WhatsApp;
+los límites y las rutas de envío se mantienen. Las marcas de entrega/lectura se
+muestran únicamente cuando el estado guardado de Meta las acredita.
+
 ## Fotos, videos y bandejas de Meta (28-oct-2026)
 
 El formulario admite archivos del dispositivo en WhatsApp, Messenger e Instagram.
