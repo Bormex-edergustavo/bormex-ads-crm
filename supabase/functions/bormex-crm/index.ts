@@ -112,6 +112,11 @@ Deno.serve(async (req) => {
       return json(await getMetaSubscriptionDiagnostics());
     }
 
+    if (pathname === "/api/meta/credentials/status" && req.method === "GET") {
+      if (accessRole !== "ads") return text("Acceso no permitido para este usuario", 403);
+      return json(await metaMessagingCredentialStatus());
+    }
+
     if (pathname === "/api/meta/coexistence" && req.method === "GET") {
       return json(await getMetaCoexistenceSetup(url));
     }
@@ -417,6 +422,7 @@ function configPayload(role = "") {
     whatsappApiConfigured: Boolean(whatsappSendTokenConfigured && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappSendApiConfigured: Boolean(whatsappSendTokenConfigured && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappSendProofConfigured: Boolean(whatsappSendAppSecret()),
+    whatsappSendCredentialSource: Deno.env.get("WHATSAPP_SEND_CREDENTIALS_SOURCE") === "paired_media" ? "paired_media" : "send",
     whatsappReceiveApiConfigured: Boolean(whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappCoexistenceReady: Boolean(metaWebhookVerifyToken() && whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappCoexistenceOnboardingConfigured: Boolean(metaAppId() && metaEmbeddedSignupConfigId()),
@@ -1680,17 +1686,11 @@ async function sendMessengerMessage(to: string, textBody: string, media: { type:
 
 async function sendMessengerApiMessage(token: string, to: string, message: Record<string, unknown>, fallbackError: string) {
   const target = await socialTarget("messenger");
-  const response = await fetch(`https://graph.facebook.com/${graphVersion()}/${target.accountId}/messages`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({
+  const payload = await socialGraph(target, `/${target.accountId}/messages`, "POST", {
       messaging_type: "RESPONSE",
       recipient: { id: to },
       message,
-    }),
   });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error?.message || fallbackError);
   if (!payload.message_id) throw new Error("Meta no confirmó el envío de Messenger");
   return payload.message_id;
 }
@@ -2200,6 +2200,10 @@ async function graphRequest(path: string, token: string, method: "GET" | "POST",
   const url = new URL(`https://graph.facebook.com/${graphVersion()}${cleanPath}`);
   url.searchParams.set("access_token", token);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  if (!url.searchParams.has("appsecret_proof")) {
+    const proof = await metaMessagingProofFor(token);
+    if (proof) url.searchParams.set("appsecret_proof", proof);
+  }
   const response = await fetch(url.toString(), { method });
   const payload = await response.json();
   if (!response.ok) throw new Error(graphApiErrorMessage(payload, response.status));
@@ -2210,6 +2214,8 @@ async function graphJsonRequest(path: string, token: string, method: "POST", bod
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
   const url = new URL(`https://graph.facebook.com/${graphVersion()}${cleanPath}`);
   url.searchParams.set("access_token", token);
+  const proof = await metaMessagingProofFor(token);
+  if (proof) url.searchParams.set("appsecret_proof", proof);
   const response = await fetch(url.toString(), {
     method,
     headers: { "content-type": "application/json" },
@@ -2230,6 +2236,8 @@ async function graphFormRequest(
   const url = new URL(`https://graph.facebook.com/${graphVersion()}${cleanPath}`);
   const body = new URLSearchParams(params);
   body.set("access_token", token);
+  const proof = await metaMessagingProofFor(token);
+  if (proof) body.set("appsecret_proof", proof);
   const response = await fetch(url.toString(), {
     method,
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -3289,6 +3297,8 @@ function extractMetaMessagingEvents(payload: any) {
   for (const entry of payload.entry || []) {
     for (const event of entry.messaging || []) {
       const channel = getMetaMessagingChannel(payload, entry, event);
+      const businessAccountId = channel === "instagram" ? instagramAccountId() : messengerPageId();
+      if (!businessAccountId || String(entry.id || "") !== businessAccountId) continue;
       const sender = String(event.sender?.id || "");
       const recipient = String(event.recipient?.id || "");
       if (!sender || (!event.message && !event.postback && !event.referral)) continue;
@@ -3305,6 +3315,7 @@ function extractMetaMessagingEvents(payload: any) {
         id: conversationId,
         channel,
         contactId,
+        businessAccountId,
         phone: "",
         name: contactId,
         avatarUrl,
@@ -3810,6 +3821,12 @@ function whatsappAccessToken() {
 }
 
 function whatsappSendAccessToken() {
+  if (Deno.env.get("WHATSAPP_SEND_CREDENTIALS_SOURCE") === "paired_media") {
+    const token = String(Deno.env.get("WHATSAPP_MEDIA_ACCESS_TOKEN") || "").trim();
+    const secret = String(Deno.env.get("WHATSAPP_MEDIA_APP_SECRET") || "").trim();
+    if (!token || !secret) throw new HttpError(503, "Falta el par de credenciales elegido para envío de WhatsApp");
+    return token;
+  }
   const sendToken = Deno.env.get("WHATSAPP_SEND_ACCESS_TOKEN") || Deno.env.get("WHATSAPP_COEX_ACCESS_TOKEN") || "";
   if (sendToken) return sendToken;
   return Deno.env.get("WHATSAPP_USE_ACCESS_TOKEN_FOR_SEND") === "true" ? whatsappAccessToken() : "";
@@ -4041,6 +4058,8 @@ async function socialTarget(channel: string): Promise<SocialTarget> {
 
 async function socialGraph(target: SocialTarget, path: string, method = "GET", body?: unknown) {
   const url = new URL(`https://${target.host}/${graphVersion()}${path}`);
+  const secret = socialAppSecret(target.channel);
+  if (secret) url.searchParams.set("appsecret_proof", await metaAppSecretProof(target.token, secret));
   const headers = new Headers({ authorization: `Bearer ${target.token}` });
   if (body) headers.set("content-type", "application/json");
   const response = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(25000) });
@@ -4098,7 +4117,52 @@ async function syncSocialInbox(options: any) {
 
 const CRM_MEDIA_BUCKET = "bormex-crm-media";
 
+function socialAppSecret(channel: string) {
+  const explicit = Deno.env.get(channel === "instagram" ? "INSTAGRAM_APP_SECRET" : "MESSENGER_APP_SECRET") || "";
+  if (explicit) return explicit;
+  return Deno.env.get("META_MESSAGING_APP_SECRET_SOURCE") === "paired_whatsapp_media"
+    ? Deno.env.get("WHATSAPP_MEDIA_APP_SECRET") || "" : "";
+}
+
+async function metaMessagingProofFor(token: string) {
+  if (token && token === messengerAccessToken()) return metaAppSecretProof(token, socialAppSecret("messenger"));
+  if (token && token === instagramAccessToken()) return metaAppSecretProof(token, socialAppSecret("instagram"));
+  return "";
+}
+
+async function metaMessagingCredentialStatus() {
+  const result: Record<string, unknown> = {};
+  for (const [label, token, secret] of [
+    ["whatsapp_send", whatsappSendAccessToken(), whatsappSendAppSecret()],
+    ["whatsapp_media", Deno.env.get("WHATSAPP_MEDIA_ACCESS_TOKEN") || "", Deno.env.get("WHATSAPP_MEDIA_APP_SECRET") || ""],
+    ["messenger", messengerAccessToken(), socialAppSecret("messenger")],
+    ["instagram", instagramAccessToken(), socialAppSecret("instagram")],
+  ]) {
+    if (!token) { result[label] = { configured: false }; continue; }
+    try {
+      const url = new URL(`https://graph.facebook.com/${graphVersion()}/debug_token`);
+      url.searchParams.set("input_token", token);
+      if (secret) url.searchParams.set("appsecret_proof", await metaAppSecretProof(token, secret));
+      const response = await fetch(url, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) });
+      const payload = await response.json();
+      const d = payload.data || {};
+      result[label] = { configured: true, ok: response.ok, valid: typeof d.is_valid === "boolean" ? d.is_valid : null,
+        appId: String(d.app_id || ""), application: String(d.application || ""), type: String(d.type || ""),
+        scopes: Array.isArray(d.scopes) ? d.scopes : [], expiresAt: d.expires_at || null,
+        errorCode: payload.error?.code || null, error: String(payload.error?.message || "").replaceAll(token, "[token]").slice(0, 300) };
+    } catch { result[label] = { configured: true, ok: false, error: "No se pudo verificar la credencial con Meta" }; }
+  }
+  if (messengerPageId() && messengerAccessToken()) {
+    try {
+      const page = await graphRequest(`/${messengerPageId()}?fields=id,name,link,instagram_business_account{id,username,name}`, messengerAccessToken(), "GET");
+      result.businessPage = { id: String(page.id || ""), name: String(page.name || ""), link: String(page.link || ""), instagram: page.instagram_business_account || null };
+    } catch (error) { result.businessPage = { ok: false, error: error instanceof Error ? error.message : "No se pudo leer la página comercial" }; }
+  }
+  return result;
+}
+
 function whatsappSendAppSecret() {
+  if (Deno.env.get("WHATSAPP_SEND_CREDENTIALS_SOURCE") === "paired_media") return String(Deno.env.get("WHATSAPP_MEDIA_APP_SECRET") || "").trim();
   const explicit = String(Deno.env.get("WHATSAPP_SEND_APP_SECRET") || "").trim();
   if (explicit) return explicit;
   // Reuse a proof only when the existing dedicated media token is exactly the

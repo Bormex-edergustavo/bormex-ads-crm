@@ -37,11 +37,23 @@ y cuenta. Configure `MESSENGER_PAGE_ID`, `MESSENGER_PAGE_ACCESS_TOKEN`,
 con Facebook Login, configure también la página vinculada. Solo para tokens de
 Instagram Login configure `INSTAGRAM_LOGIN_MODE=instagram`. No se selecciona una
 página ajena automáticamente. El token de anuncios no acredita acceso a mensajes.
+El webhook acepta únicamente el ID comercial configurado para cada canal;
+ignora eventos de otras páginas o cuentas, aunque tengan acceso a la app.
 
 Para tokens de WhatsApp que exigen `appsecret_proof`, configure el secreto de
 la misma app en `WHATSAPP_SEND_APP_SECRET`. La prueba de envío queda separada
 del secreto global de firmas y del par de lectura de archivos. No activar
 `META_APP_SECRET` para resolver el envío: puede bloquear webhooks de otro emisor.
+Si el propietario selecciona expresamente el par de medios ya verificado,
+`WHATSAPP_SEND_CREDENTIALS_SOURCE=paired_media` usa conjuntamente
+`WHATSAPP_MEDIA_ACCESS_TOKEN` y `WHATSAPP_MEDIA_APP_SECRET`; falla si falta uno.
+Para Messenger/Instagram, use `MESSENGER_APP_SECRET`/`INSTAGRAM_APP_SECRET`.
+Solo si sus tokens pertenecen a la misma app del par de medios verificado,
+`META_MESSAGING_APP_SECRET_SOURCE=paired_whatsapp_media` permite reutilizar
+ese secreto para sus pruebas. La firma global del webhook sigue independiente.
+
+`GET /api/meta/credentials/status` permite al administrador comprobar vigencia,
+app emisora, permisos e identidad comercial sin devolver las credenciales.
 
 Validación: `npm test`. Las pruebas simulan Meta y Storage; no envían mensajes
 a clientes. La función del servidor es la implementación productiva de Supabase.
