@@ -89,6 +89,24 @@ ese secreto para sus pruebas. La firma global del webhook sigue independiente.
 `GET /api/meta/credentials/status` permite al administrador comprobar vigencia,
 app emisora, permisos e identidad comercial sin devolver las credenciales.
 
+Cuando el número ya está conectado mediante Dualhook, el servidor también admite
+su [Runtime API oficial](https://dualhook.com/docs/runtime-api-reference).
+Este transporte permanece desactivado hasta configurar
+`WHATSAPP_SEND_TRANSPORT=dualhook` y `DUALHOOK_RUNTIME_API_KEY` en los secretos del
+servidor. La clave debe pertenecer a la conexión del mismo número y WABA; no
+sirve un token de Meta. No crear otra cuenta ni volver a dar de alta el número
+para resolver un fallo de permisos.
+
+El transporte usa exclusivamente `api.dualhook.com/v25.0` para enviar, subir y
+descargar archivos; Dualhook aporta internamente su token y prueba de Meta.
+La clave nunca se manda a Graph, a un enlace de medios ni al navegador. Los
+archivos guardados con la app anterior se envían mediante un enlace temporal
+del almacenamiento privado, en lugar de reutilizar su ID entre aplicaciones.
+Si falta la clave, el envío falla sin cambiar automáticamente a otro token.
+La recepción conserva sus webhooks actuales. Una respuesta de envío con ID
+confirma aceptación; comprobar también el estado de entrega antes de declarar
+reparada una prueba real.
+
 Validación: `npm test`. Las pruebas simulan Meta y Storage; no envían mensajes
 a clientes. La función del servidor es la implementación productiva de Supabase.
 

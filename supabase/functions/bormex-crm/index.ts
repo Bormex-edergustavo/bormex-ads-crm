@@ -140,6 +140,11 @@ Deno.serve(async (req) => {
       return json({ ok: audience.ok && purchases.ok, audience, purchases });
     }
 
+    if (pathname === "/api/meta/whatsapp/subscribe" && req.method === "POST") {
+      if (accessRole !== "ads") return text("Acceso no permitido para este usuario", 403);
+      return json(await subscribeWhatsAppSendingApp());
+    }
+
     if (pathname === "/api/meta/subscribe" && req.method === "POST") {
       return json(await subscribeMetaWebhooks(url));
     }
@@ -435,13 +440,13 @@ function configPayload(role = "") {
     whatsappPhoneConfigured: Boolean(Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappApiConfigured: Boolean(whatsappSendTokenConfigured && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappSendApiConfigured: Boolean(whatsappSendTokenConfigured && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
-    whatsappSendProofConfigured: Boolean(whatsappSendAppSecret()),
-    whatsappSendCredentialSource: Deno.env.get("WHATSAPP_SEND_CREDENTIALS_SOURCE") === "paired_media" ? "paired_media" : "send",
+    whatsappSendProofConfigured: dualhookRuntimeEnabled() || Boolean(whatsappSendAppSecret()),
+    whatsappSendCredentialSource: dualhookRuntimeEnabled() ? "dualhook" : Deno.env.get("WHATSAPP_SEND_CREDENTIALS_SOURCE") === "paired_media" ? "paired_media" : "send",
     whatsappReceiveApiConfigured: Boolean(whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappCoexistenceReady: Boolean(metaWebhookVerifyToken() && whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappCoexistenceOnboardingConfigured: Boolean(metaAppId() && metaEmbeddedSignupConfigId()),
     webhookSignatureConfigured: Boolean(metaAppSecret()),
-    mediaCredentialsConfigured: Boolean(
+    mediaCredentialsConfigured: dualhookRuntimeEnabled() ? Boolean(dualhookRuntimeKey()) : Boolean(
       (Deno.env.get("WHATSAPP_MEDIA_ACCESS_TOKEN") || "").trim() &&
       (Deno.env.get("WHATSAPP_MEDIA_APP_SECRET") || "").trim(),
     ),
@@ -1320,6 +1325,8 @@ async function sendCrmMessage(body: any) {
   if (media.storagePath) {
     const stored = await readCrmUpload(media.storagePath);
     if (stored.channel !== channel || stored.conversationId !== conversationId) throw new HttpError(400, "El archivo pertenece a otra conversación");
+    const crossAppUpload = channel === "whatsapp" && dualhookRuntimeEnabled() && stored.whatsappTransport !== "dualhook";
+    if (crossAppUpload) media.id = "";
     Object.assign(media, stored, { url: channel === "whatsapp" && media.id ? "" : await signedCrmMediaUrl(media.storagePath) });
   }
   if (!channel || !conversationId || !to || (!textBody && !media.url && !media.id)) throw new Error("Faltan datos para enviar el mensaje");
@@ -1420,7 +1427,7 @@ async function sendWhatsAppMessage(to: string, textBody: string, media: { type: 
   const token = whatsappSendAccessToken();
   const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
   if (!token || !phoneNumberId) {
-    throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_SEND_ACCESS_TOKEN/WHATSAPP_COEX_ACCESS_TOKEN para enviar desde API Meta");
+    throw new HttpError(503, "Falta completar la conexión oficial de WhatsApp para enviar desde el CRM");
   }
   let body = buildWhatsAppMessageBody(to, textBody, media);
   let response = await postWhatsAppMessage(phoneNumberId, token, body);
@@ -1435,6 +1442,11 @@ async function sendWhatsAppMessage(to: string, textBody: string, media: { type: 
     payload = await response.json();
   }
   if (!response.ok) {
+    console.error("whatsapp_send_rejected", JSON.stringify({
+      status: response.status, code: Number(payload.error?.code) || null,
+      subcode: Number(payload.error?.error_subcode) || null,
+      type: String(payload.error?.type || ""), traceId: String(payload.error?.fbtrace_id || ""),
+    }));
     const denied = [10, 200].includes(Number(payload.error?.code)) || /necessary permissions/i.test(String(payload.error?.message || ""));
     throw new HttpError(denied ? 403 : 502, formatWhatsAppSendError(payload, { to, media }));
   }
@@ -1471,6 +1483,7 @@ async function postWhatsAppMessage(phoneNumberId: string, token: string, body: R
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify(body),
+    redirect: "error",
   });
 }
 
@@ -1553,7 +1566,7 @@ async function uploadWhatsAppMedia(formData: FormData) {
   const token = whatsappSendAccessToken();
   const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
   if (!token || !phoneNumberId) {
-    throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_SEND_ACCESS_TOKEN/WHATSAPP_COEX_ACCESS_TOKEN");
+    throw new HttpError(503, "Falta completar la conexión oficial de WhatsApp para enviar archivos");
   }
   const file = formData.get("file");
   if (!(file instanceof File)) throw new HttpError(400, "Selecciona un archivo valido");
@@ -1569,7 +1582,7 @@ async function uploadWhatsAppMedia(formData: FormData) {
 
   const graphForm = new FormData();
   graphForm.append("messaging_product", "whatsapp");
-  graphForm.append("type", file.type || "application/octet-stream");
+  if (!dualhookRuntimeEnabled()) graphForm.append("type", file.type || "application/octet-stream");
   graphForm.append("file", file, file.name || "archivo");
 
   const endpoint = await whatsappSendEndpoint(phoneNumberId, "media", token);
@@ -1577,6 +1590,7 @@ async function uploadWhatsAppMedia(formData: FormData) {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
     body: graphForm,
+    redirect: "error",
   });
   const payload = await response.json();
   if (!response.ok) {
@@ -1625,6 +1639,7 @@ function parseWhatsAppMediaRequest(pathname: string) {
 }
 
 async function downloadWhatsAppMedia(mediaId: string, req: Request, filename = "") {
+  if (dualhookRuntimeEnabled()) return downloadDualhookMedia(mediaId, req, filename);
   let stage: "credentials" | "proof" | "metadata" | "binary" = "credentials";
   let upstreamStatus = 0;
   try {
@@ -2033,6 +2048,24 @@ function sanitizeCoexistenceSync(value: any) {
     skipped: Boolean(value.skipped),
     reason: value.reason || "",
   };
+}
+
+async function subscribeWhatsAppSendingApp() {
+  if (dualhookRuntimeEnabled()) throw new HttpError(400, "La suscripción se administra en la conexión de Dualhook");
+  const token = whatsappSendAccessToken();
+  const wabaId = String(Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID") || "");
+  if (!token || !wabaId) throw new HttpError(503, "Falta la conexión de WhatsApp de Bormex");
+  const endpoint = await whatsappSendEndpoint(wabaId, "subscribed_apps", token);
+  const response = await fetch(endpoint, {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({}), signal: AbortSignal.timeout(45000),
+  });
+  const payload = await response.json();
+  const result = { ok: response.ok && payload.success === true, accountId: wabaId,
+    code: payload.error?.code || null, subcode: payload.error?.error_subcode || null,
+    error: String(payload.error?.message || "").replaceAll(token, "[token]").slice(0, 300) };
+  if (result.ok) await setSetting("whatsappSendingAppSubscription", { ok: true, accountId: wabaId, at: new Date().toISOString() });
+  return result;
 }
 
 async function subscribeMetaWebhooks(requestUrl: URL) {
@@ -3863,7 +3896,52 @@ function whatsappAccessToken() {
   return Deno.env.get("WHATSAPP_ACCESS_TOKEN") || Deno.env.get("META_ACCESS_TOKEN") || "";
 }
 
+function dualhookRuntimeEnabled() {
+  return Deno.env.get("WHATSAPP_SEND_TRANSPORT") === "dualhook";
+}
+
+function dualhookRuntimeKey() {
+  const key = String(Deno.env.get("DUALHOOK_RUNTIME_API_KEY") || "").trim();
+  return /^dh_live_[A-Za-z0-9_-]{16,}$/.test(key) ? key : "";
+}
+
+function dualhookRuntimeEndpoint(id: string, edge = "") {
+  if (!dualhookRuntimeKey()) throw new HttpError(503, "Falta completar la conexión oficial de WhatsApp");
+  const phoneId = String(Deno.env.get("WHATSAPP_PHONE_NUMBER_ID") || "");
+  const allowed = ["messages", "media"].includes(edge)
+    ? Boolean(phoneId && id === phoneId)
+    : /^\d{5,50}$/.test(id) && edge === "content";
+  if (!allowed) throw new HttpError(400, "Operación de WhatsApp no admitida");
+  return new URL(`https://api.dualhook.com/v25.0/${encodeURIComponent(id)}/${edge}`);
+}
+
+// The provider owns the Meta credential and proof. Never forward our Meta
+// tokens, proofs, or a provider key to another host, including redirects.
+async function downloadDualhookMedia(mediaId: string, req: Request, filename: string) {
+  let status = 0;
+  try {
+    const endpoint = dualhookRuntimeEndpoint(mediaId, "content");
+    const headers = new Headers({ authorization: `Bearer ${dualhookRuntimeKey()}` });
+    if (req.headers.get("range")) headers.set("range", req.headers.get("range")!);
+    const response = await fetch(endpoint, { headers, redirect: "error" });
+    status = response.status;
+    if (!response.ok || !response.body) throw new HttpError(status, "El proveedor no permitió descargar el archivo");
+    const contentType = response.headers.get("content-type") || "application/octet-stream";
+    const responseHeaders = new Headers({ "cache-control": "private, max-age=300", "content-type": contentType });
+    const name = mediaProxyFilename(filename, contentType, "");
+    responseHeaders.set("content-disposition", `inline; filename="${name.replace(/"/g, "")}"`);
+    for (const header of ["content-length", "content-range", "accept-ranges"]) {
+      const value = response.headers.get(header); if (value) responseHeaders.set(header, value);
+    }
+    return cors(new Response(whatsappMediaStream(response.body), { status: status === 206 ? 206 : 200, headers: responseHeaders }));
+  } catch (error) {
+    if (error instanceof HttpError && [400, 503].includes(error.status)) throw error;
+    throw whatsappMediaReadError("binary", error, status);
+  }
+}
+
 function whatsappSendAccessToken() {
+  if (dualhookRuntimeEnabled()) return dualhookRuntimeKey();
   if (Deno.env.get("WHATSAPP_SEND_CREDENTIALS_SOURCE") === "paired_media") {
     const token = String(Deno.env.get("WHATSAPP_MEDIA_ACCESS_TOKEN") || "").trim();
     const secret = String(Deno.env.get("WHATSAPP_MEDIA_APP_SECRET") || "").trim();
@@ -4177,10 +4255,13 @@ async function metaMessagingCredentialStatus() {
   const result: Record<string, unknown> = {};
   for (const [label, token, secret] of [
     ["whatsapp_send", whatsappSendAccessToken(), whatsappSendAppSecret()],
+    ["whatsapp_explicit", Deno.env.get("WHATSAPP_SEND_ACCESS_TOKEN") || Deno.env.get("WHATSAPP_COEX_ACCESS_TOKEN") || "", Deno.env.get("WHATSAPP_SEND_APP_SECRET") || ""],
+    ["whatsapp_read", whatsappAccessToken(), ""],
     ["whatsapp_media", Deno.env.get("WHATSAPP_MEDIA_ACCESS_TOKEN") || "", Deno.env.get("WHATSAPP_MEDIA_APP_SECRET") || ""],
     ["messenger", messengerAccessToken(), socialAppSecret("messenger")],
     ["instagram", instagramAccessToken(), socialAppSecret("instagram")],
   ]) {
+    if (label === "whatsapp_send" && dualhookRuntimeEnabled()) { result[label] = { configured: Boolean(token), transport: "dualhook", providerProof: true }; continue; }
     if (!token) { result[label] = { configured: false }; continue; }
     try {
       const url = new URL(`https://graph.facebook.com/${graphVersion()}/debug_token`);
@@ -4197,6 +4278,24 @@ async function metaMessagingCredentialStatus() {
         errorCode: payload.error?.code || null, error: String(payload.error?.message || "").replaceAll(token, "[token]").slice(0, 300) };
     } catch { result[label] = { configured: true, ok: false, error: "No se pudo verificar la credencial con Meta" }; }
   }
+  // Inspect the pre-existing explicit send token with this app's own credential.
+  // This verifies the issuing app before any secret can be paired for sending.
+  const explicitToken = Deno.env.get("WHATSAPP_SEND_ACCESS_TOKEN") || Deno.env.get("WHATSAPP_COEX_ACCESS_TOKEN") || "";
+  const pairedSecret = Deno.env.get("WHATSAPP_MEDIA_APP_SECRET") || "";
+  const pairedAppId = String((result.whatsapp_media as any)?.appId || "");
+  if (explicitToken && pairedSecret && pairedAppId) {
+    try {
+      const url = new URL(`https://graph.facebook.com/${graphVersion()}/debug_token`);
+      url.searchParams.set("input_token", explicitToken);
+      const response = await fetch(url, { headers: { authorization: `Bearer ${pairedAppId}|${pairedSecret}` }, signal: AbortSignal.timeout(15000) });
+      const payload = await response.json(); const d = payload.data || {};
+      result.whatsapp_explicit_verified = { ok: response.ok, valid: d.is_valid === true,
+        sameApp: String(d.app_id || "") === pairedAppId, appId: String(d.app_id || ""),
+        application: String(d.application || ""), type: String(d.type || ""), userId: String(d.user_id || ""),
+        scopes: d.scopes || [], granularScopes: d.granular_scopes || [], expiresAt: d.expires_at || null,
+        error: String(payload.error?.message || "").replaceAll(explicitToken, "[token]").replaceAll(pairedSecret, "[secret]").slice(0, 240) };
+    } catch { result.whatsapp_explicit_verified = { ok: false, error: "No se pudo comprobar la credencial explícita" }; }
+  }
   // Read-only diagnostics with the exact token/secret pair selected for sending.
   if ((result.whatsapp_send as any)?.valid) {
     const token = whatsappSendAccessToken();
@@ -4212,12 +4311,13 @@ async function metaMessagingCredentialStatus() {
         return body;
       } catch { return { ok: false, error: "Meta no respondió a la comprobación" }; }
     };
-    result.whatsappConnection = {
-      phoneId, wabaId,
-      identity: await read("me", "", "id,name"),
-      phone: phoneId ? await read(phoneId, "", "id,display_phone_number,verified_name,is_on_biz_app,platform_type") : null,
-      subscribedApps: wabaId ? await read(wabaId, "subscribed_apps", "whatsapp_business_api_data") : null,
-    };
+    const [identity, phone, account, subscribedApps] = await Promise.all([
+      read("me", "", "id,name"),
+      phoneId ? read(phoneId, "", "id,display_phone_number,verified_name,is_on_biz_app,platform_type") : null,
+      wabaId ? read(wabaId, "", "id,name,owner_business_info") : null,
+      wabaId ? read(wabaId, "subscribed_apps", "") : null,
+    ]);
+    result.whatsappConnection = { phoneId, wabaId, identity, phone, account, subscribedApps };
   }
   if (messengerPageId() && messengerAccessToken()) {
     try {
@@ -4229,6 +4329,7 @@ async function metaMessagingCredentialStatus() {
 }
 
 function whatsappSendAppSecret() {
+  if (dualhookRuntimeEnabled()) return "";
   if (Deno.env.get("WHATSAPP_SEND_CREDENTIALS_SOURCE") === "paired_media") return String(Deno.env.get("WHATSAPP_MEDIA_APP_SECRET") || "").trim();
   const explicit = String(Deno.env.get("WHATSAPP_SEND_APP_SECRET") || "").trim();
   if (explicit) return explicit;
@@ -4240,6 +4341,7 @@ function whatsappSendAppSecret() {
 }
 
 async function whatsappSendEndpoint(phoneNumberId: string, edge: string, token: string) {
+  if (dualhookRuntimeEnabled()) return dualhookRuntimeEndpoint(phoneNumberId, edge);
   const url = new URL(`https://graph.facebook.com/${graphVersion()}/${phoneNumberId}/${edge}`);
   const secret = whatsappSendAppSecret();
   if (secret) url.searchParams.set("appsecret_proof", await metaAppSecretProof(token, secret));
@@ -4396,7 +4498,7 @@ async function uploadCrmMedia(form: FormData) {
     method: "POST", headers: { "content-type": file.type || "application/octet-stream", "x-upsert": "false" }, body: file,
   });
   if (!response.ok) throw new HttpError(502, "No se pudo guardar el archivo. Intenta de nuevo.");
-  const metadata = { channel, conversationId, type, filename: file.name || filename, mimeType: file.type, storagePath, size: file.size, at: new Date().toISOString() };
+  const metadata = { channel, conversationId, type, filename: file.name || filename, mimeType: file.type, storagePath, size: file.size, at: new Date().toISOString(), ...(channel === "whatsapp" ? { whatsappTransport: dualhookRuntimeEnabled() ? "dualhook" : "meta" } : {}) };
   await setSetting(`crmUpload:${storagePath}`, metadata);
   if (channel === "whatsapp") {
     const upload = await uploadWhatsAppMedia(form);

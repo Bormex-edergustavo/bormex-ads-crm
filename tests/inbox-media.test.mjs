@@ -11,7 +11,7 @@ function harness(overrides={}) {
   const env={PANEL_PASSWORD:'test-password',SUPABASE_URL:'https://storage.test',SUPABASE_SERVICE_ROLE_KEY:'test-service',MESSENGER_PAGE_ACCESS_TOKEN:'page-token',MESSENGER_PAGE_ID:'page123',INSTAGRAM_ACCOUNT_ID:'ig123',INSTAGRAM_ACCESS_TOKEN:'ig-token',WHATSAPP_SEND_ACCESS_TOKEN:'wa-send',WHATSAPP_PHONE_NUMBER_ID:'wa123',...overrides};
   const tables=Object.fromEntries(["conversations","messages","settings","sales","leads","spend","ads"].map(name=>[`bormex_${name}`,new Map()]));
   for(const channel of ['whatsapp','messenger','instagram'])tables.bormex_conversations.set(`${channel}_contact`,{id:`${channel}_contact`,channel,contactId:'contact',phone:'521234567890',name:'Prueba',tags:['keep'],unread:3,lastAt:'2026-10-27T12:00:00Z'});
-  const calls=[];const storedObjects=new Map();let handler,bucket=false,sequence=0;
+  const calls=[];const errorLogs=[];const storedObjects=new Map();let handler,bucket=false,sequence=0;
   const response=(x,status=200,headers={})=>new Response(JSON.stringify(x),{status,headers:{'content-type':'application/json',...headers}});
   const fetch=async(input,options={})=>{
     const url=new URL(input);const method=options.method||'GET';calls.push({url:String(url),method,options});
@@ -34,11 +34,20 @@ function harness(overrides={}) {
       if(method==='DELETE'&&url.pathname==='/storage/v1/object/bormex-crm-media'){for(const k of JSON.parse(options.body).prefixes)storedObjects.delete('bormex-crm-media/'+k);return response({});}
       if(method==='POST'&&url.pathname.includes('/object/')){storedObjects.set(url.pathname.replace('/storage/v1/object/',''),options.body);return response({Key:'file'});}
     }
+    if(url.hostname==='api.dualhook.com'){
+      assert.equal(options.headers instanceof Headers?options.headers.get('authorization'):options.headers.authorization,`Bearer ${env.DUALHOOK_RUNTIME_API_KEY}`);
+      assert(!url.searchParams.has('appsecret_proof'));assert(!url.searchParams.has('access_token'));assert.equal(options.redirect,'error');
+      if(url.pathname.endsWith('/media')&&method==='POST'){assert(options.body instanceof FormData);assert.deepEqual([...options.body.keys()],['messaging_product','file']);return response({id:'123456789123456'});}
+      if(url.pathname.endsWith('/messages')&&method==='POST')return response({messages:[{id:`dhmid${++sequence}`}]});
+      if(url.pathname.endsWith('/content')&&method==='GET')return new Response(new Uint8Array([1,2,3,4]),{status:206,headers:{'content-type':'video/mp4','content-range':'bytes 0-3/8','accept-ranges':'bytes'}});
+      throw new Error('Unexpected runtime operation');
+    }
     if(['graph.facebook.com','graph.instagram.com'].includes(url.hostname)){
       if(url.pathname.endsWith('/messages')&&method==='POST'&&env.TEST_SEND_DENIED)return response({error:{code:10,message:'Application does not have permission for this action'}},403);
       if(url.pathname.endsWith('/messages')&&method==='POST'&&env.TEST_SEND_EMPTY)return response({});
       if(url.pathname.endsWith('/messages')&&method==='POST')return response({message_id:`mid${++sequence}`,messages:[{id:`mid${sequence}`} ]});
       if(url.pathname.endsWith('/media')&&method==='POST')return response({id:'wa-media-id'});
+      if(url.pathname.endsWith('/subscribed_apps')&&method==='POST')return response({success:true});
       if(url.pathname.endsWith('/conversations'))return response({data:[{id:'thread123',participants:{data:[{id:'page123'},{id:'ig123'},{id:'contact',name:'Persona'}]}}],paging:{cursors:{after:'next'},next:'https://graph.facebook.com/next'}});
       if(url.pathname.endsWith('/thread123/messages'))return response({data:[{id:'history1',message:'Mensaje histórico',from:{id:'contact'},to:{data:[{id:'page123'}]},created_time:'2026-10-28T12:00:00Z',attachments:{data:[{id:'attachment123',video_data:{url:'https://video.xx.fbcdn.net/video.mp4'}}]}}]});
       if(url.searchParams.get('fields')==='attachments')return response({attachments:{data:[{image_data:{url:'https://scontent.xx.fbcdn.net/fresh.jpg'}}]}});
@@ -49,13 +58,13 @@ function harness(overrides={}) {
     }
     throw new Error('Unexpected network request: '+url);
   };
-  const c=vm.createContext({Deno:{env:{get:k=>env[k]},serve:f=>handler=f},fetch,URL,URLSearchParams,Request,Response,Headers,FormData,File,Blob,TextEncoder,TextDecoder,Uint8Array,ReadableStream,AbortSignal,crypto:webcrypto,atob,btoa,structuredClone,console:{error:()=>{}}});
+  const c=vm.createContext({Deno:{env:{get:k=>env[k]},serve:f=>handler=f},fetch,URL,URLSearchParams,Request,Response,Headers,FormData,File,Blob,TextEncoder,TextDecoder,Uint8Array,ReadableStream,AbortSignal,crypto:webcrypto,atob,btoa,structuredClone,console:{error:(...args)=>errorLogs.push(args)}});
   vm.runInContext(stripTypeScriptTypes(source),c);
   const request=(path,method='GET',body,auth=true)=>handler(new Request('https://crm.test/bormex-crm'+path,{method,headers:{...(auth?{authorization:'Basic '+btoa('panel:test-password')}:{})},body:body instanceof FormData?body:body?JSON.stringify(body):undefined}));
   const upload=async(channel,type='image/png',name='foto.png',size=10)=>{
     const f=new FormData();f.set('channel',channel);f.set('conversationId',`${channel}_contact`);f.set('file',new File([new Uint8Array(size)],name,{type}));return request('/api/media/upload','POST',f);
   };
-  return{c,env,tables,calls,request,upload,storedObjects};
+  return{c,env,tables,calls,request,upload,storedObjects,errorLogs};
 }
 await test('Protected upload, media and inbox reject unauthenticated requests',async()=>{
   const h=harness();for(const [path,method]of [['/api/media/upload','POST'],['/api/media/message/id/0/photo.jpg','GET'],['/api/meta/inbox/sync','POST']])assert.equal((await h.request(path,method,undefined,false)).status,401);
@@ -150,6 +159,7 @@ await test('Meta permission rejection is explicit and never becomes an outgoing 
   const h=harness({TEST_SEND_DENIED:true});const before=h.tables.bormex_conversations.get('whatsapp_contact').lastAt;
   const r=await h.request('/api/messages','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',to:'521234567890',text:'Pedido'});
   assert.equal(r.status,403);assert.match((await r.json()).error,/Meta no autorizó/);assert.equal(h.tables.bormex_messages.size,0);assert.equal(h.tables.bormex_conversations.get('whatsapp_contact').lastAt,before);
+  const log=h.errorLogs.find(args=>args[0]==='whatsapp_send_rejected');assert(log);const metadata=JSON.parse(log[1]);assert.equal(metadata.code,10);assert(!JSON.stringify(log).includes('521234567890'));assert(!JSON.stringify(log).includes('wa-send'));
 });
 await test('An empty Meta success response cannot invent a sent message ID',async()=>{
   const h=harness({TEST_SEND_EMPTY:true});const r=await h.request('/api/messages','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',to:'521234567890',text:'Pedido'});assert.equal(r.status,502);assert.equal(h.tables.bormex_messages.size,0);
@@ -191,6 +201,36 @@ await test('An explicit different ad cannot inherit another ad name or click ID'
 });
 await test('Sale attribution preview is protected and available to the sales role',async()=>{
   const h=harness();assert.equal((await h.request('/api/sales/attribution?conversationId=whatsapp_contact','GET',undefined,false)).status,401);assert(h.c.isPathAllowed('/api/sales/attribution','GET','sales'));assert.equal((await h.request('/api/sales/attribution?conversationId=missing')).status,404);assert.equal((await h.request('/api/sales/attribution')).status,400);
+});
+
+await test('WhatsApp app subscription uses only the configured business and paired sending proof',async()=>{
+  const h=harness({WHATSAPP_BUSINESS_ACCOUNT_ID:'bormex-waba',WHATSAPP_SEND_CREDENTIALS_SOURCE:'paired_media',WHATSAPP_MEDIA_ACCESS_TOKEN:'paired-token',WHATSAPP_MEDIA_APP_SECRET:'paired-secret'});
+  assert.equal((await h.request('/api/meta/whatsapp/subscribe','POST',{},false)).status,401);assert(!h.c.isPathAllowed('/api/meta/whatsapp/subscribe','POST','sales'));
+  const r=await h.request('/api/meta/whatsapp/subscribe','POST',{});assert.equal(r.status,200);assert.equal((await r.json()).ok,true);
+  const calls=h.calls.filter(call=>call.url.includes('graph.facebook.com'));assert.equal(calls.length,1);const url=new URL(calls[0].url);assert(url.pathname.endsWith('/bormex-waba/subscribed_apps'));assert(url.searchParams.get('appsecret_proof'));assert.equal(calls[0].options.headers.authorization,'Bearer paired-token');assert(!url.searchParams.has('access_token'));
+});
+
+await test('Official provider transport uploads and sends without forwarding Meta tokens or proofs',async()=>{
+  const h=harness({WHATSAPP_SEND_TRANSPORT:'dualhook',DUALHOOK_RUNTIME_API_KEY:'dh_live_runtime_test_123456789'});const media=await(await h.upload('whatsapp','video/mp4','video.mp4')).json();
+  const r=await h.request('/api/messages','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',to:'521234567890',mediaType:'video',mediaId:media.mediaId,mediaStoragePath:media.storagePath});assert.equal(r.status,200,await r.clone().text());assert.equal(h.tables.bormex_messages.size,1);
+  const runtime=h.calls.filter(c=>c.url.includes('api.dualhook.com'));assert.equal(runtime.length,2);const body=JSON.parse(runtime[1].options.body);assert.equal(body.video.id,'123456789123456');assert(!body.phone_number_id);assert(!body.access_token);assert(!h.calls.some(c=>c.url.includes('graph.facebook.com')));
+});
+await test('Provider downloads keep range headers and never expose a key to Meta or a media URL',async()=>{
+  const h=harness({WHATSAPP_SEND_TRANSPORT:'dualhook',DUALHOOK_RUNTIME_API_KEY:'dh_live_runtime_test_123456789'});const r=await h.c.downloadWhatsAppMedia('123456789',new Request('https://crm.test/file',{headers:{range:'bytes=0-3'}}),'video.mp4');assert.equal(r.status,206);assert.equal(r.headers.get('content-range'),'bytes 0-3/8');assert.equal((await r.arrayBuffer()).byteLength,4);
+  const calls=h.calls.filter(c=>c.url.includes('dualhook'));assert.equal(calls.length,1);assert.equal(new URL(calls[0].url).pathname,'/v25.0/123456789/content');assert.equal(calls[0].options.headers.get('range'),'bytes=0-3');assert(!h.calls.some(c=>c.url.includes('graph.facebook.com')));
+  await assert.rejects(()=>h.c.downloadWhatsAppMedia('https://other.test',new Request('https://crm.test/file'),'file'),e=>e.status===400);assert.equal(h.calls.length,1);
+});
+await test('Missing provider key cannot fall back to a configured Meta token',async()=>{
+  const h=harness({WHATSAPP_SEND_TRANSPORT:'dualhook'});const r=await h.request('/api/messages','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',to:'521234567890',text:'Hola'});assert.equal(r.status,503);assert(!h.calls.some(c=>c.url.includes('graph.facebook.com')||c.url.includes('api.dualhook.com')));
+});
+await test('An archived upload made with the old app is sent by its private signed file URL',async()=>{
+  const h=harness();const media=await(await h.upload('whatsapp','video/mp4','video.mp4')).json();h.env.WHATSAPP_SEND_TRANSPORT='dualhook';h.env.DUALHOOK_RUNTIME_API_KEY='dh_live_runtime_test_123456789';const before=h.calls.length;
+  const r=await h.request('/api/messages','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',to:'521234567890',mediaType:'video',mediaId:media.mediaId,mediaStoragePath:media.storagePath});assert.equal(r.status,200,await r.clone().text());const call=h.calls.slice(before).find(c=>c.url.includes('api.dualhook.com'));const body=JSON.parse(call.options.body);assert(body.video.link.startsWith('https://storage.test/'));assert(!body.video.id);assert(!h.calls.slice(before).some(c=>c.url.includes('graph.facebook.com')));
+});
+await test('Provider key is excluded from Meta diagnostics and webhook-management requests',async()=>{
+  const h=harness({WHATSAPP_SEND_TRANSPORT:'dualhook',DUALHOOK_RUNTIME_API_KEY:'dh_live_runtime_test_123456789'});const d=await h.c.metaMessagingCredentialStatus();assert.equal(d.whatsapp_send.transport,'dualhook');assert.equal(d.whatsapp_send.configured,true);
+  assert(!h.calls.some(c=>c.url.includes(h.env.DUALHOOK_RUNTIME_API_KEY)||[...new Headers(c.options.headers).values()].some(value=>value.includes(h.env.DUALHOOK_RUNTIME_API_KEY))));
+  const before=h.calls.length;const r=await h.request('/api/meta/whatsapp/subscribe','POST',{});assert.equal(r.status,400);assert.equal(h.calls.length,before);
 });
 
 for(const check of checks)console.log(check.pass?'PASS':'FAIL',check.name,check.error||'');
