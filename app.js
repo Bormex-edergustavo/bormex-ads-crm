@@ -1602,7 +1602,10 @@ function highlightThreadSearch(scrollToMatch = true) {
     return match;
   });
   document.getElementById("threadSearchCount").textContent = query ? `${matches.length} coincidencias` : "";
-  if (scrollToMatch && matches.length) matches[0].scrollIntoView({ block: "center", behavior: "smooth" });
+  if (scrollToMatch && matches.length) {
+    document.getElementById("messageThread").dataset.followBottom = "false";
+    matches[0].scrollIntoView({ block: "center", behavior: "smooth" });
+  }
 }
 
 function getConversationDisplayName(conversation) {
@@ -1952,7 +1955,9 @@ function renderCrm() {
   if (previousThreadConversationId !== activeConversationId || threadWasNearBottom) {
     thread.scrollTop = thread.scrollHeight;
   }
+  thread.dataset.followBottom = String(previousThreadConversationId !== activeConversationId || threadWasNearBottom);
   hydrateMediaAttachments(thread);
+  if (thread.dataset.followBottom === "true") requestAnimationFrame(() => { thread.scrollTop = thread.scrollHeight; });
   highlightThreadSearch(false);
 }
 
@@ -3090,6 +3095,21 @@ document.addEventListener("keydown", event => {
   highlightThreadSearch(false);
 });
 document.getElementById("threadSearch").addEventListener("input", () => highlightThreadSearch());
+
+const crmMessageThread = document.getElementById("messageThread");
+function keepLoadedMediaAtBottom() {
+  if (crmMessageThread.dataset.followBottom !== "true") return;
+  requestAnimationFrame(() => { crmMessageThread.scrollTop = crmMessageThread.scrollHeight; });
+}
+crmMessageThread.addEventListener("load", keepLoadedMediaAtBottom, true);
+crmMessageThread.addEventListener("loadedmetadata", keepLoadedMediaAtBottom, true);
+for (const eventName of ["wheel", "touchstart", "pointerdown"]) {
+  crmMessageThread.addEventListener(eventName, () => { crmMessageThread.dataset.followBottom = "false"; }, { passive: true });
+}
+crmMessageThread.addEventListener("scroll", () => {
+  if (crmMessageThread.scrollTop + crmMessageThread.clientHeight >= crmMessageThread.scrollHeight - 80) crmMessageThread.dataset.followBottom = "true";
+}, { passive: true });
+
 document.querySelector('#replyForm textarea').addEventListener("input", event => {
   event.target.style.height = "auto";
   event.target.style.height = `${Math.min(event.target.scrollHeight, 120)}px`;
