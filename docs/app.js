@@ -53,6 +53,10 @@ let remoteRequestVersion = 0;
 let syncInFlight = null;
 let syncQueued = false;
 let saleSaveInFlight = false;
+let saleAttributionPromise = null;
+let saleAttributionContext = null;
+let saleAttributionVersion = 0;
+let saleOriginPhone = "";
 let lastCompactSyncAt = "";
 let remoteCoexistenceSetup = null;
 let crmSearchTimer = null;
@@ -164,6 +168,7 @@ function wait(ms) {
 }
 
 function resetRemoteSessionState({ clearData = false } = {}) {
+  saleAttributionVersion++; saleAttributionContext = null; saleAttributionPromise = null;
   replyAttachmentFile = null;
   replyUploadCache = null;
   resetReplyVideoJob();
@@ -821,8 +826,8 @@ function getSaleAttribution(sale) {
     const matchedAd = findAdById(saleAdId);
     const metaAd = findMetaAdById(saleAdId) || matchedAd;
     return {
-      source: "manual_ad_id",
-      campaign: metaAd?.campaign || sale.campaign || "ID manual",
+      source: sale.attributionSource || "manual_ad_id",
+      campaign: metaAd?.campaign || sale.campaign || (String(sale.attributionSource || "").startsWith("manual") ? "ID manual" : "Sin campaña"),
       campaignId: metaAd?.campaignId || sale.campaignId || "",
       adset: metaAd?.adset || sale.adset || "",
       ad: adName(metaAd) || sale.ad || `Anuncio ${saleAdId}`,
@@ -836,7 +841,7 @@ function findLeadForPhone(phoneValue) {
   const phone = normalizePhone(phoneValue);
   return [...state.leads]
     .filter((lead) => normalizePhone(lead.phone) === phone)
-    .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+    .sort((a, b) => Number(Boolean(extractStoredAttribution(b, "lead")?.adId)) - Number(Boolean(extractStoredAttribution(a, "lead")?.adId)) || new Date(b.date) - new Date(a.date))[0];
 }
 
 function extractStoredAttribution(record, source = "stored") {
@@ -886,7 +891,7 @@ function findMessageAttributionForConversation(conversation, phoneValue = "") {
   const conversationId = String(conversation?.id || "");
   return [...(state.messages || [])]
     .filter((message) => {
-      if (conversationId && message.conversationId === conversationId) return true;
+      if (conversationId) return message.conversationId === conversationId;
       return phone && [message.from, message.to].some((value) => normalizePhone(value) === phone);
     })
     .map((message) => extractStoredAttribution(message, "message_referral"))
@@ -897,10 +902,10 @@ function findMessageAttributionForConversation(conversation, phoneValue = "") {
 function findKnownAttributionForSale(sale) {
   const conversation = findConversationBySale(sale);
   const lead = findLeadForSale(sale);
-  return (
-    extractStoredAttribution(conversation, "conversation") ||
-    (lead ? { ...lead, source: "lead" } : null) ||
-    findMessageAttributionForConversation(conversation, sale?.phone)
+  return preferredSaleAttribution(
+    extractStoredAttribution(conversation, "conversation"),
+    findMessageAttributionForConversation(conversation, sale?.phone),
+    extractStoredAttribution(lead, "lead"),
   );
 }
 
@@ -915,7 +920,9 @@ function applyKnownSaleAttribution(sale) {
   sale.adset = attribution.adset || "";
   sale.campaign = attribution.campaign || "";
   sale.campaignId = attribution.campaignId || "";
-  sale.attributionSource = attribution.source || "auto_sale_attribution";
+  sale.ctwaClid = attribution.ctwaClid || "";
+  sale.sourceUrl = attribution.sourceUrl || "";
+  sale.attributionSource = attribution.attributionSource || attribution.source || "auto_sale_attribution";
   return sale;
 }
 
@@ -951,12 +958,16 @@ function isFollowUpTag(tag) {
   return tag?.action === "followup" || /retro|seguimiento|pendiente/i.test(tag?.name || "");
 }
 
+function preferredSaleAttribution(...candidates) {
+  return candidates.find(candidate => candidate?.adId) || candidates.find(Boolean) || null;
+}
+
 function getConversationAttribution(conversation) {
-  const direct = extractStoredAttribution(conversation, "conversation");
-  if (direct) return direct;
-  const lead = getConversationLead(conversation);
-  if (lead) return { ...lead, source: "lead" };
-  return findMessageAttributionForConversation(conversation);
+  return preferredSaleAttribution(
+    extractStoredAttribution(conversation, "conversation"),
+    findMessageAttributionForConversation(conversation),
+    extractStoredAttribution(getConversationLead(conversation), "lead"),
+  );
 }
 
 function conversationDueStatus(conversation) {
@@ -2306,6 +2317,8 @@ async function handleSaleSubmit(event) {
   event.preventDefault();
   const form = event.currentTarget;
   if (saleSaveInFlight) return;
+  if (saleAttributionPromise) await saleAttributionPromise;
+  if (saleSaveInFlight) return;
   const data = Object.fromEntries(new FormData(form));
   const products = new FormData(form).getAll("products");
   if (!products.length) {
@@ -2327,6 +2340,9 @@ async function handleSaleSubmit(event) {
   if (manualAdId && isPhoneUsedAsAdId(manualAdId, sale.phone)) {
     applyKnownSaleAttribution(sale);
     saveMessage = "Venta registrada. Ignoré ese número porque es el WhatsApp del cliente.";
+  } else if (manualAdId && saleAttributionContext?.conversationId === sale.sourceConversationId && saleAttributionContext.adId === manualAdId) {
+    const { conversationId, ...attribution } = saleAttributionContext;
+    Object.assign(sale, attribution);
   } else if (manualAdId) {
     applyManualAdAttribution(sale, data.adId);
   } else {
@@ -2537,19 +2553,44 @@ async function removeTagFromActiveConversation(tagId) {
   await saveConversationPatch({ tags: conversationTagIds(conversation).filter((item) => item !== tagId) }, "Etiqueta quitada");
 }
 
+function showSaleAttribution(attribution, manual = false) {
+  const status = document.getElementById("saleAttributionStatus");
+  status.textContent = attribution?.adId
+    ? `${manual ? "ID indicado manualmente" : "Anuncio detectado"}: ${attribution.adId}${attribution.ad ? ` · ${attribution.ad}` : ""}`
+    : "Meta no entregó un ID de anuncio para esta conversación. Puedes guardar la venta sin atribución o indicar un ID verificado.";
+}
+
 function prefillSaleFromConversation(conversation = getActiveConversation()) {
   if (!conversation) return;
   const form = document.getElementById("saleForm");
   const attribution = getConversationAttribution(conversation);
+  const version = ++saleAttributionVersion;
+  const initialAdId = attribution?.adId || "";
+  saleOriginPhone = normalizePhone(conversation.phone || "");
+  saleAttributionContext = attribution ? { ...attribution, attributionSource: attribution.attributionSource || attribution.source, conversationId: conversation.id } : null;
+  saleAttributionPromise = null;
   setView("sales");
   form.elements.phone.value = conversation.phone || "";
   form.elements.amount.value = "";
   form.elements.date.value = today();
-  form.elements.adId.value = attribution?.adId || "";
+  form.elements.adId.value = initialAdId;
   form.elements.sourceConversationId.value = conversation.id;
-  form.querySelectorAll('input[name="products"]').forEach((input) => {
-    input.checked = false;
-  });
+  form.querySelectorAll('input[name="products"]').forEach(input => { input.checked = false; });
+  showSaleAttribution(attribution);
+  if (serverAvailable) {
+    document.getElementById("saleAttributionStatus").textContent = "Comprobando anuncio de origen…";
+    const pending = api(`/api/sales/attribution?conversationId=${encodeURIComponent(conversation.id)}`).then(result => {
+      if (version !== saleAttributionVersion || form.elements.sourceConversationId.value !== conversation.id) return;
+      if (form.elements.adId.value !== initialAdId) return; // Preserve an explicit edit while loading.
+      const found = result.attribution;
+      saleAttributionContext = found ? { ...found, conversationId: conversation.id } : null;
+      form.elements.adId.value = found?.adId || "";
+      showSaleAttribution(found);
+    }).catch(() => {
+      if (version === saleAttributionVersion) document.getElementById("saleAttributionStatus").textContent = "No se pudo completar la consulta del anuncio. El servidor volverá a comprobarlo al guardar la venta.";
+    }).finally(() => { if (saleAttributionPromise === pending) saleAttributionPromise = null; });
+    saleAttributionPromise = pending;
+  }
   form.elements.amount.focus();
   toast("Venta precargada desde CRM");
 }
@@ -2944,10 +2985,30 @@ document.querySelectorAll(".nav-item").forEach((button) => {
 });
 
 document.querySelectorAll("[data-open-sale]").forEach((button) => {
-  button.addEventListener("click", () => setView("sales"));
+  button.addEventListener("click", () => {
+    if (getActiveView() === "crm" && getActiveConversation()) prefillSaleFromConversation();
+    else setView("sales");
+  });
 });
 
 document.getElementById("saleForm").addEventListener("submit", handleSaleSubmit);
+document.getElementById("saleForm").addEventListener("reset", event => {
+  event.currentTarget.elements.sourceConversationId.value = "";
+  saleAttributionVersion++; saleAttributionContext = null; saleAttributionPromise = null; saleOriginPhone = "";
+  document.getElementById("saleAttributionStatus").textContent = "El anuncio se detecta al abrir una venta desde el chat.";
+});
+document.querySelector('#saleForm input[name="phone"]').addEventListener("input", () => {
+  const form = document.getElementById("saleForm");
+  if (form.elements.sourceConversationId.value && (!saleOriginPhone || normalizePhone(form.elements.phone.value) === saleOriginPhone)) return;
+  saleAttributionVersion++; saleAttributionContext = null; saleAttributionPromise = null; saleOriginPhone = "";
+  form.elements.sourceConversationId.value = "";
+  form.elements.adId.value = "";
+  document.getElementById("saleAttributionStatus").textContent = "Se comprobará el anuncio para este número al guardar.";
+});
+document.querySelector('#saleForm input[name="adId"]').addEventListener("input", event => {
+  const adId = normalizeAdId(event.target.value);
+  showSaleAttribution(adId ? { adId } : null, adId !== saleAttributionContext?.adId);
+});
 document.getElementById("crmTagForm")?.addEventListener("submit", createCrmTag);
 document.getElementById("runFollowups")?.addEventListener("click", runFollowups);
 document.getElementById("openWhatsAppDraft").addEventListener("click", openWhatsAppDraft);

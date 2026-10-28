@@ -9,7 +9,7 @@ async function test(name,fn){try{await fn();checks.push({name,pass:true});}catch
 function fn(source,name){const start=source.indexOf(`function ${name}(`);assert(start>=0,name);return source.slice(start,source.indexOf('\n}',start)+2);}
 function harness(overrides={}) {
   const env={PANEL_PASSWORD:'test-password',SUPABASE_URL:'https://storage.test',SUPABASE_SERVICE_ROLE_KEY:'test-service',MESSENGER_PAGE_ACCESS_TOKEN:'page-token',MESSENGER_PAGE_ID:'page123',INSTAGRAM_ACCOUNT_ID:'ig123',INSTAGRAM_ACCESS_TOKEN:'ig-token',WHATSAPP_SEND_ACCESS_TOKEN:'wa-send',WHATSAPP_PHONE_NUMBER_ID:'wa123',...overrides};
-  const tables={bormex_conversations:new Map(),bormex_messages:new Map(),bormex_settings:new Map()};
+  const tables=Object.fromEntries(["conversations","messages","settings","sales","leads","spend","ads"].map(name=>[`bormex_${name}`,new Map()]));
   for(const channel of ['whatsapp','messenger','instagram'])tables.bormex_conversations.set(`${channel}_contact`,{id:`${channel}_contact`,channel,contactId:'contact',phone:'521234567890',name:'Prueba',tags:['keep'],unread:3,lastAt:'2026-10-27T12:00:00Z'});
   const calls=[];const storedObjects=new Map();let handler,bucket=false,sequence=0;
   const response=(x,status=200,headers={})=>new Response(JSON.stringify(x),{status,headers:{'content-type':'application/json',...headers}});
@@ -20,6 +20,9 @@ function harness(overrides={}) {
       if(method==='POST'){for(const row of JSON.parse(options.body))table.set(row.id||row.key,row.data||row.value);return response({});}
       const key=url.searchParams.get('id')||url.searchParams.get('key');let rows=[...table].filter(([k,v])=>!key||key.startsWith('in.')||key===`eq.${k}`);
       for(const [k,v]of url.searchParams)if(k.startsWith('data->>'))rows=rows.filter(([,r])=>v===`eq.${r[k.slice(7)]}`);
+      if(url.searchParams.get('or')?.includes('adId.neq')) rows=rows.filter(([,r])=>r.adId||r.ad_id||r.metaAdId);
+      const order=url.searchParams.get('order')||'';if(order.startsWith('data->>')){const [field,direction]=order.slice(7).split('.');rows.sort(([,a],[,b])=>String(a[field]||'').localeCompare(String(b[field]||''))*(direction==='desc'?-1:1));}
+      const offset=Number(url.searchParams.get('offset')||0);const limit=Number(url.searchParams.get('limit')||rows.length);rows=rows.slice(offset,offset+limit);
       return response(rows.map(([id,data])=>url.pathname.endsWith('bormex_settings')?{key:id,value:data}:{id,data}));
     }
     if(url.hostname==='storage.test'&&url.pathname.startsWith('/storage/v1/')){
@@ -150,6 +153,44 @@ await test('Meta permission rejection is explicit and never becomes an outgoing 
 });
 await test('An empty Meta success response cannot invent a sent message ID',async()=>{
   const h=harness({TEST_SEND_EMPTY:true});const r=await h.request('/api/messages','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',to:'521234567890',text:'Pedido'});assert.equal(r.status,502);assert.equal(h.tables.bormex_messages.size,0);
+});
+
+await test('CRM sale preview detects the chat ad and saving preserves its ID and referral',async()=>{
+  const h=harness();Object.assign(h.tables.bormex_conversations.get('whatsapp_contact'),{adId:'120123456789001',ad:'Imanes',ctwaClid:'click-origin',attributionSource:'whatsapp_referral'});
+  const r=await h.request('/api/sales/attribution?conversationId=whatsapp_contact');assert.equal(r.status,200,await r.clone().text());assert.equal((await r.json()).attribution.adId,'120123456789001');assert.equal(h.tables.bormex_sales.size,0);assert(!h.calls.some(c=>c.url.includes('graph.facebook.com')));
+  const saved=await h.request('/api/sales','POST',{id:'sale-test',phone:'521234567890',sourceConversationId:'whatsapp_contact',products:['Imán'],amount:100,date:'2026-10-28'});assert.equal(saved.status,200,await saved.clone().text());const sale=h.tables.bormex_sales.get('sale-test');assert.equal(sale.adId,'120123456789001');assert.equal(sale.ctwaClid,'click-origin');assert.equal(sale.attributionSource,'whatsapp_referral');
+});
+await test('Partial chat metadata cannot hide an old ad referral beyond the last 100 messages',async()=>{
+  const h=harness();h.tables.bormex_conversations.get('whatsapp_contact').campaign='Click-to-WhatsApp';
+  h.tables.bormex_messages.set('origin',{id:'origin',conversationId:'whatsapp_contact',adId:'120123456789002',at:'2026-01-01T00:00:00Z',attributionSource:'whatsapp_referral'});
+  for(let i=0;i<120;i++)h.tables.bormex_messages.set(`later${i}`,{id:`later${i}`,conversationId:'whatsapp_contact',at:`2026-10-28T12:${String(i%60).padStart(2,'0')}:00Z`});
+  h.tables.bormex_leads.set('other-ad',{id:'other-ad',phone:'521234567890',adId:'120123456789099',date:'2026-10-28'});
+  const r=await h.request('/api/sales/attribution?conversationId=whatsapp_contact');assert.equal(r.status,200);assert.equal((await r.json()).attribution.adId,'120123456789002');
+  assert(h.calls.some(c=>c.url.includes('/bormex_messages?')&&new URL(c.url).searchParams.get('or')?.includes('adId.neq')));
+});
+await test('A lead ad ID wins over partial chat information and a newer empty lead',async()=>{
+  const h=harness();h.tables.bormex_conversations.get('whatsapp_contact').campaign='Parcial';h.tables.bormex_leads.set('older',{id:'older',phone:'521234567890',adId:'120123456789003',date:'2026-10-01'});h.tables.bormex_leads.set('newer',{id:'newer',phone:'521234567890',campaign:'Sin ID',date:'2026-10-28'});
+  const r=await h.request('/api/sales/attribution?conversationId=whatsapp_contact');assert.equal((await r.json()).attribution.adId,'120123456789003');
+});
+await test('Organic chat stays without an invented ad and explicit manual IDs survive',async()=>{
+  const h=harness();const preview=await h.request('/api/sales/attribution?conversationId=whatsapp_contact');assert.equal((await preview.json()).attribution,null);
+  const r=await h.request('/api/sales','POST',{id:'organic',phone:'521234567890',sourceConversationId:'whatsapp_contact',amount:100,products:['Pin']});assert.equal(r.status,200);assert.equal(h.tables.bormex_sales.get('organic').adId,'');
+  const manual=await h.request('/api/sales','POST',{id:'manual',phone:'521234567890',sourceConversationId:'whatsapp_contact',adId:'120123456789004',attributionSource:'manual_ad_id',amount:100});assert.equal(manual.status,200);assert.equal(h.tables.bormex_sales.get('manual').adId,'120123456789004');
+});
+await test('Explicit source chat excludes a different chat referral and rejects a changed phone',async()=>{
+  const h=harness();h.tables.bormex_messages.set('wrong',{id:'wrong',conversationId:'messenger_contact',from:'521234567890',adId:'120123456789999'});
+  const r=await h.request('/api/sales/attribution?conversationId=whatsapp_contact');assert.equal((await r.json()).attribution,null);
+  const mismatch=await h.request('/api/sales','POST',{id:'wrong-phone',phone:'529876543210',sourceConversationId:'whatsapp_contact',amount:100});assert.equal(mismatch.status,400);assert.equal(h.tables.bormex_sales.size,0);
+});
+await test('Social ad conversation can be previewed without a WhatsApp number',async()=>{
+  const h=harness();Object.assign(h.tables.bormex_conversations.get('instagram_contact'),{phone:'',adId:'120123456789005',attributionSource:'instagram_referral'});const r=await h.request('/api/sales/attribution?conversationId=instagram_contact');assert.equal(r.status,200);assert.equal((await r.json()).attribution.adId,'120123456789005');
+});
+await test('An explicit different ad cannot inherit another ad name or click ID',async()=>{
+  const h=harness();Object.assign(h.tables.bormex_conversations.get('whatsapp_contact'),{adId:'120123456789001',ad:'Otro anuncio',ctwaClid:'other-click'});
+  const r=await h.request('/api/sales','POST',{id:'manual-override',phone:'521234567890',sourceConversationId:'whatsapp_contact',adId:'120123456789777',attributionSource:'manual_ad_id',amount:100});assert.equal(r.status,200);const sale=h.tables.bormex_sales.get('manual-override');assert.equal(sale.adId,'120123456789777');assert.equal(sale.ad,'');assert.equal(sale.ctwaClid,'');
+});
+await test('Sale attribution preview is protected and available to the sales role',async()=>{
+  const h=harness();assert.equal((await h.request('/api/sales/attribution?conversationId=whatsapp_contact','GET',undefined,false)).status,401);assert(h.c.isPathAllowed('/api/sales/attribution','GET','sales'));assert.equal((await h.request('/api/sales/attribution?conversationId=missing')).status,404);assert.equal((await h.request('/api/sales/attribution')).status,400);
 });
 
 for(const check of checks)console.log(check.pass?'PASS':'FAIL',check.name,check.error||'');

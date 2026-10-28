@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
     <title>Bormex Ads CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20261028-paste-send-1" />
+    <link rel="stylesheet" href="styles.css?v=20261028-sale-attribution-1" />
   </head>
   <body>
     <div class="app-shell" id="appShell">
@@ -278,8 +278,9 @@
               </label>
               <label class="full">
                 ID del anuncio opcional
-                <input name="adId" list="adIdOptions" placeholder="El CRM lo llena solo cuando Meta lo entrega" />
+                <input name="adId" list="adIdOptions" aria-label="ID del anuncio opcional" aria-describedby="saleAttributionStatus" placeholder="El CRM lo llena solo cuando Meta lo entrega" />
                 <datalist id="adIdOptions"></datalist>
+                <small id="saleAttributionStatus" role="status" aria-live="polite">El anuncio se detecta al abrir una venta desde el chat.</small>
               </label>
               <div class="form-actions full">
                 <button class="primary-button" type="submit">Guardar venta</button>
@@ -469,7 +470,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=20261028-paste-send-1"></script>
+    <script src="app.js?v=20261028-sale-attribution-1"></script>
     <script>
       window.lucide?.createIcons();
     </script>

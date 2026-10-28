@@ -280,6 +280,15 @@ Deno.serve(async (req) => {
       return json(await runFollowUpNotifications());
     }
 
+    if (pathname === "/api/sales/attribution" && req.method === "GET") {
+      const conversationId = String(url.searchParams.get("conversationId") || "").trim();
+      if (!conversationId) throw new HttpError(400, "Falta la conversación de origen");
+      const conversation = await readItemById("conversations", conversationId);
+      if (!conversation) throw new HttpError(404, "No se encontró la conversación de origen");
+      const attribution = await findSaleAttributionFromDb({ sourceConversationId: conversationId, phone: conversation.phone || "" });
+      return json({ conversationId, attribution });
+    }
+
     if (pathname === "/api/sales" && req.method === "POST") {
       const normalized = normalizeSale(await readJson(req));
       const existingSale = await readItemById("sales", String(normalized.id || ""));
@@ -508,6 +517,7 @@ function isPathAllowed(pathname: string, method: string, role: string) {
   if (method === "POST" && pathname.startsWith("/api/conversations/")) return true;
   if (method === "POST" && pathname === "/api/crm-tags") return true;
   if (method === "POST" && pathname === "/api/followups/run") return true;
+  if (method === "GET" && pathname === "/api/sales/attribution") return true;
   if (method === "POST" && pathname === "/api/sales") return true;
   if (method === "DELETE" && pathname.startsWith("/api/sales/")) return true;
   if (method === "DELETE" && pathname.startsWith("/api/records/sales/")) return true;
@@ -3500,6 +3510,7 @@ function normalizeSale(body: any) {
 
 async function enrichSaleAttribution(sale: Record<string, any>) {
   const attribution = await findSaleAttributionFromDb(sale);
+  if (sale.adId && attribution?.adId && normalizeAdId(sale.adId) !== normalizeAdId(attribution.adId)) return { ...sale, attributionSource: sale.attributionSource || "manual_ad_id" };
   if (!attribution) {
     return {
       ...sale,
@@ -3528,6 +3539,7 @@ async function findSaleAttributionFromDb(sale: Record<string, any>) {
     phone ? readCollectionByJsonField("conversations", "contactId", phone, { limit: 10 }) : Promise.resolve([]),
     phone ? readCollectionByJsonField("leads", "phone", phone, { limit: 20 }) : Promise.resolve([]),
   ]);
+  if (directConversation?.phone && phone && normalizePhone(directConversation.phone) !== phone) throw new HttpError(400, "El número de la venta no coincide con la conversación de origen");
   const conversations = compactItemsById([
     ...(directConversation ? [directConversation] : []),
     ...phoneConversations,
@@ -3539,23 +3551,35 @@ async function findSaleAttributionFromDb(sale: Record<string, any>) {
     leads,
   };
   const directAttribution = findSaleAttribution(sale, context);
-  if (directAttribution) return directAttribution;
+  if (directAttribution?.adId && (!conversations.length || extractAttribution(findConversationForSale(sale, context), "conversation")?.adId)) return directAttribution;
 
-  const messagePages = await Promise.all(
-    conversations.slice(0, 3).map((conversation: any) =>
-      readConversationMessages(String(conversation.id || ""), { limit: 100 }).catch(() => ({ messages: [] }))
-    ),
-  );
-  context.messages = messagePages.flatMap((page: any) => page.messages || []);
+  // Filter referrals in the database so an old ad survives a long conversation.
+  const messageConversations = directConversation ? [directConversation] : conversations.slice(0, 3);
+  const messages = await Promise.all(messageConversations.map(async (conversation: any) => {
+    const params = new URLSearchParams({
+      select: "data", "data->>conversationId": `eq.${conversation.id}`,
+      or: '(data->>adId.neq."",data->>ad_id.neq."",data->>metaAdId.neq."")',
+      order: "data->>at.desc", limit: "20",
+    });
+    const response = await supabaseFetch(`/rest/v1/${tableMap.messages}?${params}`);
+    const rows = await response.json();
+    if (!response.ok) throw new Error(rows.message || "No se pudo consultar el anuncio de origen");
+    return rows.map((row: any) => row.data);
+  }));
+  context.messages = messages.flat();
   return findSaleAttribution(sale, context);
+}
+
+function preferredAttribution(...candidates: any[]) {
+  return candidates.find((candidate) => candidate?.adId) || candidates.find(Boolean) || null;
 }
 
 function findSaleAttribution(sale: Record<string, any>, db: typeof defaultDb) {
   const conversation = findConversationForSale(sale, db);
-  return (
-    extractAttribution(conversation, "conversation") ||
-    extractAttribution(findLeadForSaleRecord(sale, db), "lead") ||
-    extractAttribution(findMessageAttributionForSale(sale, conversation, db), "message_referral")
+  return preferredAttribution(
+    extractAttribution(conversation, "conversation"),
+    extractAttribution(findMessageAttributionForSale(sale, conversation, db), "message_referral"),
+    extractAttribution(findLeadForSaleRecord(sale, db), "lead"),
   );
 }
 
@@ -3577,7 +3601,7 @@ function findLeadForSaleRecord(sale: Record<string, any>, db: typeof defaultDb) 
   if (!phone) return null;
   return [...(db.leads || [])]
     .filter((lead: any) => normalizePhone(lead.phone || "") === phone)
-    .sort((a: any, b: any) => Date.parse(String(b.date || "")) - Date.parse(String(a.date || "")))[0] || null;
+    .sort((a: any, b: any) => Number(Boolean(extractAttribution(b, "lead")?.adId)) - Number(Boolean(extractAttribution(a, "lead")?.adId)) || Date.parse(String(b.date || "")) - Date.parse(String(a.date || "")))[0] || null;
 }
 
 function findMessageAttributionForSale(sale: Record<string, any>, conversation: any, db: typeof defaultDb) {
@@ -3585,7 +3609,7 @@ function findMessageAttributionForSale(sale: Record<string, any>, conversation: 
   const conversationId = String(sale.sourceConversationId || conversation?.id || "");
   return [...(db.messages || [])]
     .filter((message: any) => {
-      if (conversationId && String(message.conversationId || "") === conversationId) return true;
+      if (conversationId) return String(message.conversationId || "") === conversationId;
       return phone && [message.from, message.to].some((value) => normalizePhone(value || "") === phone);
     })
     .filter(hasAttribution)
