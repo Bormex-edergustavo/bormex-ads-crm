@@ -38,6 +38,11 @@ con Facebook Login, configure también la página vinculada. Solo para tokens de
 Instagram Login configure `INSTAGRAM_LOGIN_MODE=instagram`. No se selecciona una
 página ajena automáticamente. El token de anuncios no acredita acceso a mensajes.
 
+Para tokens de WhatsApp que exigen `appsecret_proof`, configure el secreto de
+la misma app en `WHATSAPP_SEND_APP_SECRET`. La prueba de envío queda separada
+del secreto global de firmas y del par de lectura de archivos. No activar
+`META_APP_SECRET` para resolver el envío: puede bloquear webhooks de otro emisor.
+
 Validación: `npm test`. Las pruebas simulan Meta y Storage; no envían mensajes
 a clientes. La función del servidor es la implementación productiva de Supabase.
 

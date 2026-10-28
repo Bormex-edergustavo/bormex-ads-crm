@@ -416,6 +416,7 @@ function configPayload(role = "") {
     whatsappPhoneConfigured: Boolean(Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappApiConfigured: Boolean(whatsappSendTokenConfigured && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappSendApiConfigured: Boolean(whatsappSendTokenConfigured && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
+    whatsappSendProofConfigured: Boolean(whatsappSendAppSecret()),
     whatsappReceiveApiConfigured: Boolean(whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappCoexistenceReady: Boolean(metaWebhookVerifyToken() && whatsappAccessToken() && Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")),
     whatsappCoexistenceOnboardingConfigured: Boolean(metaAppId() && metaEmbeddedSignupConfigId()),
@@ -1422,8 +1423,9 @@ function buildWhatsAppMessageBody(to: string, textBody: string, media: { type: s
       };
 }
 
-function postWhatsAppMessage(phoneNumberId: string, token: string, body: Record<string, unknown>) {
-  return fetch(`https://graph.facebook.com/${graphVersion()}/${phoneNumberId}/messages`, {
+async function postWhatsAppMessage(phoneNumberId: string, token: string, body: Record<string, unknown>) {
+  const endpoint = await whatsappSendEndpoint(phoneNumberId, "messages", token);
+  return fetch(endpoint, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -1525,15 +1527,23 @@ async function uploadWhatsAppMedia(formData: FormData) {
 
   const graphForm = new FormData();
   graphForm.append("messaging_product", "whatsapp");
+  graphForm.append("type", file.type || "application/octet-stream");
   graphForm.append("file", file, file.name || "archivo");
 
-  const response = await fetch(`https://graph.facebook.com/${graphVersion()}/${phoneNumberId}/media`, {
+  const endpoint = await whatsappSendEndpoint(phoneNumberId, "media", token);
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
     body: graphForm,
   });
   const payload = await response.json();
-  if (!response.ok) throw new Error(formatWhatsAppSendError(payload));
+  if (!response.ok) {
+    const raw = String(payload.error?.message || "Error al subir el archivo");
+    if (/appsecret_proof/i.test(raw)) throw new HttpError(503, "WhatsApp necesita completar su conexión segura para enviar archivos. La recepción sigue disponible.");
+    const message = raw.replaceAll(token, "[token]").slice(0, 500);
+    throw new HttpError(502, `Meta rechazó la subida del archivo: ${message}`);
+  }
+  if (!payload.id) throw new HttpError(502, "Meta no confirmó la subida del archivo");
   return {
     ok: true,
     mediaId: String(payload.id || ""),
@@ -1630,6 +1640,7 @@ async function downloadWhatsAppMedia(mediaId: string, req: Request, filename = "
 
 function formatWhatsAppSendError(payload: any, context: { to?: string; media?: { type?: string; filename?: string; mimeType?: string } } = {}) {
   const message = String(payload?.error?.message || "");
+  if (/appsecret_proof/i.test(message)) return "WhatsApp necesita completar su conexión segura para enviar mensajes y archivos. La recepción sigue disponible.";
   const code = payload?.error?.code ? `#${payload.error.code}` : "";
   const details = String(payload?.error?.error_data?.details || payload?.error?.error_user_msg || "");
   if (code === "#200" || message.toLowerCase().includes("necessary permissions")) {
@@ -4086,6 +4097,23 @@ async function syncSocialInbox(options: any) {
 }
 
 const CRM_MEDIA_BUCKET = "bormex-crm-media";
+
+function whatsappSendAppSecret() {
+  const explicit = String(Deno.env.get("WHATSAPP_SEND_APP_SECRET") || "").trim();
+  if (explicit) return explicit;
+  // Reuse a proof only when the existing dedicated media token is exactly the
+  // effective send token. Never guess an app secret or enable global signatures.
+  const mediaToken = String(Deno.env.get("WHATSAPP_MEDIA_ACCESS_TOKEN") || "").trim();
+  if (mediaToken && mediaToken === whatsappSendAccessToken()) return String(Deno.env.get("WHATSAPP_MEDIA_APP_SECRET") || "").trim();
+  return "";
+}
+
+async function whatsappSendEndpoint(phoneNumberId: string, edge: string, token: string) {
+  const url = new URL(`https://graph.facebook.com/${graphVersion()}/${phoneNumberId}/${edge}`);
+  const secret = whatsappSendAppSecret();
+  if (secret) url.searchParams.set("appsecret_proof", await metaAppSecretProof(token, secret));
+  return url;
+}
 
 async function crmStorageFetch(path: string, options: RequestInit = {}) {
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || readFirstSecretKey();
