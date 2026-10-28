@@ -32,6 +32,8 @@ function harness(overrides={}) {
       if(method==='POST'&&url.pathname.includes('/object/')){storedObjects.set(url.pathname.replace('/storage/v1/object/',''),options.body);return response({Key:'file'});}
     }
     if(['graph.facebook.com','graph.instagram.com'].includes(url.hostname)){
+      if(url.pathname.endsWith('/messages')&&method==='POST'&&env.TEST_SEND_DENIED)return response({error:{code:10,message:'Application does not have permission for this action'}},403);
+      if(url.pathname.endsWith('/messages')&&method==='POST'&&env.TEST_SEND_EMPTY)return response({});
       if(url.pathname.endsWith('/messages')&&method==='POST')return response({message_id:`mid${++sequence}`,messages:[{id:`mid${sequence}`} ]});
       if(url.pathname.endsWith('/media')&&method==='POST')return response({id:'wa-media-id'});
       if(url.pathname.endsWith('/conversations'))return response({data:[{id:'thread123',participants:{data:[{id:'page123'},{id:'ig123'},{id:'contact',name:'Persona'}]}}],paging:{cursors:{after:'next'},next:'https://graph.facebook.com/next'}});
@@ -134,6 +136,20 @@ await test('Incomplete or invalid chunks cannot reach Meta; cancellation removes
   assert.equal((await h.request('/api/media/upload/finish','POST',{uploadId:session.uploadId})).status,400);assert(!h.calls.some(c=>c.url.includes('graph.facebook.com')));
   assert.equal((await h.request('/api/media/upload/cancel','POST',{uploadId:session.uploadId})).status,200);assert.equal((await h.request('/api/media/upload/finish','POST',{uploadId:session.uploadId})).status,404);
   assert.equal((await h.request('/api/media/upload/finish','POST',{uploadId:'../../private'})).status,400);
+});
+
+await test('WhatsApp video uses the uploaded media ID and records only a confirmed send',async()=>{
+  const h=harness();const media=await(await h.upload('whatsapp','video/mp4','ready.mp4')).json();
+  const r=await h.request('/api/messages','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',to:'521234567890',mediaType:'video',mediaId:media.mediaId,mediaStoragePath:media.storagePath,mediaFilename:'ready.mp4',mediaMimeType:'video/mp4'});
+  assert.equal(r.status,200,await r.clone().text());const call=h.calls.find(x=>x.url.includes('graph.facebook.com')&&x.url.endsWith('/messages'));const body=JSON.parse(call.options.body);assert.equal(body.type,'video');assert.equal(body.video.id,'wa-media-id');assert(!body.video.link);assert.equal(h.tables.bormex_messages.size,1);
+});
+await test('Meta permission rejection is explicit and never becomes an outgoing message',async()=>{
+  const h=harness({TEST_SEND_DENIED:true});const before=h.tables.bormex_conversations.get('whatsapp_contact').lastAt;
+  const r=await h.request('/api/messages','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',to:'521234567890',text:'Pedido'});
+  assert.equal(r.status,403);assert.match((await r.json()).error,/Meta no autorizó/);assert.equal(h.tables.bormex_messages.size,0);assert.equal(h.tables.bormex_conversations.get('whatsapp_contact').lastAt,before);
+});
+await test('An empty Meta success response cannot invent a sent message ID',async()=>{
+  const h=harness({TEST_SEND_EMPTY:true});const r=await h.request('/api/messages','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',to:'521234567890',text:'Pedido'});assert.equal(r.status,502);assert.equal(h.tables.bormex_messages.size,0);
 });
 
 for(const check of checks)console.log(check.pass?'PASS':'FAIL',check.name,check.error||'');

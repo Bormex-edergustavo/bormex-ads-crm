@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
     <title>Bormex Ads CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20261028-video-contact-1" />
+    <link rel="stylesheet" href="styles.css?v=20261028-paste-send-1" />
   </head>
   <body>
     <div class="app-shell" id="appShell">
@@ -203,6 +203,7 @@
               </div>
               <div class="message-thread" id="messageThread" aria-label="Mensajes"></div>
               <form class="reply-box" id="replyForm">
+                <div class="reply-feedback" id="replyFeedback" role="status" aria-live="polite" hidden></div>
                 <div class="reply-file-preview" id="replyFilePreview" hidden></div>
                 <div class="composer-pill">
                   <details class="chat-popover composer-attachments">
@@ -220,7 +221,7 @@
                       <button type="button" data-reply-emoji="😀">😀</button><button type="button" data-reply-emoji="😊">😊</button><button type="button" data-reply-emoji="👍">👍</button><button type="button" data-reply-emoji="🙏">🙏</button><button type="button" data-reply-emoji="❤️">❤️</button><button type="button" data-reply-emoji="🙌">🙌</button><button type="button" data-reply-emoji="✅">✅</button><button type="button" data-reply-emoji="🎉">🎉</button><button type="button" data-reply-emoji="👋">👋</button><button type="button" data-reply-emoji="🤝">🤝</button><button type="button" data-reply-emoji="✨">✨</button><button type="button" data-reply-emoji="📦">📦</button>
                     </div>
                   </details>
-                  <textarea name="text" rows="1" aria-label="Escribe un mensaje" placeholder="Escribe un mensaje"></textarea>
+                  <textarea name="text" rows="1" aria-label="Escribe un mensaje" placeholder="Escribe un mensaje o pega una imagen"></textarea>
                   <button id="sendApiButton" type="submit" title="Enviar mensaje" aria-label="Enviar mensaje">Enviar mensaje</button>
                 </div>
               </form>
@@ -468,7 +469,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=20261028-video-contact-1"></script>
+    <script src="app.js?v=20261028-paste-send-1"></script>
     <script>
       window.lucide?.createIcons();
     </script>

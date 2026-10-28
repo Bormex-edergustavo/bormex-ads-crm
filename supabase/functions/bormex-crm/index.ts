@@ -1424,8 +1424,13 @@ async function sendWhatsAppMessage(to: string, textBody: string, media: { type: 
     response = await postWhatsAppMessage(phoneNumberId, token, body);
     payload = await response.json();
   }
-  if (!response.ok) throw new Error(formatWhatsAppSendError(payload, { to, media }));
-  return payload.messages?.[0]?.id || crypto.randomUUID();
+  if (!response.ok) {
+    const denied = [10, 200].includes(Number(payload.error?.code)) || /necessary permissions/i.test(String(payload.error?.message || ""));
+    throw new HttpError(denied ? 403 : 502, formatWhatsAppSendError(payload, { to, media }));
+  }
+  const messageId = payload.messages?.[0]?.id;
+  if (!messageId) throw new HttpError(502, "Meta no confirmó el envío. El mensaje no se marcó como enviado.");
+  return messageId;
 }
 
 function buildWhatsAppMessageBody(to: string, textBody: string, media: { type: string; url: string; id?: string; filename?: string; mimeType?: string }) {
@@ -1670,8 +1675,8 @@ function formatWhatsAppSendError(payload: any, context: { to?: string; media?: {
   if (/appsecret_proof/i.test(message)) return "WhatsApp necesita completar su conexión segura para enviar mensajes y archivos. La recepción sigue disponible.";
   const code = payload?.error?.code ? `#${payload.error.code}` : "";
   const details = String(payload?.error?.error_data?.details || payload?.error?.error_user_msg || "");
-  if (code === "#200" || message.toLowerCase().includes("necessary permissions")) {
-    return "(#200) El token configurado no tiene permiso para enviar mensajes en nombre de este WABA. Recibir por COEX/Dualhook funciona, pero para enviar desde el CRM falta configurar WHATSAPP_SEND_ACCESS_TOKEN o WHATSAPP_COEX_ACCESS_TOKEN con permisos whatsapp_business_messaging.";
+  if (["#10", "#200"].includes(code) || message.toLowerCase().includes("necessary permissions")) {
+    return `(${code || "#200"}) Meta no autorizó el envío en nombre de la cuenta de WhatsApp de Bormex. Hay que completar los permisos de envío de esta conexión.`;
   }
   if (code === "#100" || message.toLowerCase().includes("invalid parameter")) {
     const mediaType = context.media?.type ? ` ${context.media.type}` : "";
@@ -4162,9 +4167,33 @@ async function metaMessagingCredentialStatus() {
       const d = payload.data || {};
       result[label] = { configured: true, ok: response.ok, valid: typeof d.is_valid === "boolean" ? d.is_valid : null,
         appId: String(d.app_id || ""), application: String(d.application || ""), type: String(d.type || ""),
+        userId: String(d.user_id || ""),
+        granularScopes: Array.isArray(d.granular_scopes) ? d.granular_scopes.map((scope: any) => ({ scope: String(scope.scope || ""), targetIds: scope.target_ids || [] })) : [],
         scopes: Array.isArray(d.scopes) ? d.scopes : [], expiresAt: d.expires_at || null,
         errorCode: payload.error?.code || null, error: String(payload.error?.message || "").replaceAll(token, "[token]").slice(0, 300) };
     } catch { result[label] = { configured: true, ok: false, error: "No se pudo verificar la credencial con Meta" }; }
+  }
+  // Read-only diagnostics with the exact token/secret pair selected for sending.
+  if ((result.whatsapp_send as any)?.valid) {
+    const token = whatsappSendAccessToken();
+    const phoneId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID") || "";
+    const wabaId = Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID") || "";
+    const read = async (id: string, edge: string, fields: string) => {
+      try {
+        const url = await whatsappSendEndpoint(id, edge, token);
+        if (fields) url.searchParams.set("fields", fields);
+        const response = await fetch(url, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) });
+        const body = await response.json();
+        if (!response.ok) return { ok: false, code: body.error?.code, error: String(body.error?.message || "").replaceAll(token, "[token]").slice(0, 240) };
+        return body;
+      } catch { return { ok: false, error: "Meta no respondió a la comprobación" }; }
+    };
+    result.whatsappConnection = {
+      phoneId, wabaId,
+      identity: await read("me", "", "id,name"),
+      phone: phoneId ? await read(phoneId, "", "id,display_phone_number,verified_name,is_on_biz_app,platform_type") : null,
+      subscribedApps: wabaId ? await read(wabaId, "subscribed_apps", "whatsapp_business_api_data") : null,
+    };
   }
   if (messengerPageId() && messengerAccessToken()) {
     try {

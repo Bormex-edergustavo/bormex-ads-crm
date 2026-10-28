@@ -59,6 +59,9 @@ let crmSearchTimer = null;
 let crmContactInfoOpen = false;
 let crmMobileThreadOpen = false;
 let replyVideoJob = null;
+let replyAttachmentFile = null;
+let replyImagePreview = null;
+let replyUploadCache = null;
 let crmSearchRequestVersion = 0;
 const conversationMessageState = new Map();
 const mediaObjectUrlCache = new Map();
@@ -161,6 +164,16 @@ function wait(ms) {
 }
 
 function resetRemoteSessionState({ clearData = false } = {}) {
+  replyAttachmentFile = null;
+  replyUploadCache = null;
+  resetReplyVideoJob();
+  if (replyImagePreview) URL.revokeObjectURL(replyImagePreview.url);
+  replyImagePreview = null;
+  const replyForm = document.getElementById("replyForm");
+  if (replyForm) replyForm.reset();
+  const replyPreview = document.getElementById("replyFilePreview");
+  if (replyPreview) { replyPreview.hidden = true; replyPreview.replaceChildren(); }
+  setReplyFeedback();
   remoteConfig = {};
   remoteCoexistenceSetup = null;
   lastCompactSyncAt = "";
@@ -1586,6 +1599,18 @@ function updateCrmPanels() {
   document.querySelectorAll("[data-toggle-contact-info]").forEach(button => button.setAttribute("aria-expanded", String(crmContactInfoOpen)));
 }
 
+function getReplyAttachment() {
+  return replyAttachmentFile || document.getElementById("replyForm").elements.mediaFile.files?.[0] || null;
+}
+
+function setReplyFeedback(message = "", kind = "status") {
+  const feedback = document.getElementById("replyFeedback");
+  feedback.hidden = !message;
+  feedback.textContent = message;
+  feedback.className = `reply-feedback ${kind === "error" ? "is-error" : ""}`;
+  feedback.setAttribute("role", kind === "error" ? "alert" : "status");
+}
+
 function resetReplyVideoJob() {
   if (!replyVideoJob) return;
   replyVideoJob.controller.abort();
@@ -1596,9 +1621,14 @@ function resetReplyVideoJob() {
 
 function renderReplyFilePreview() {
   const form = document.getElementById("replyForm");
-  const file = form.elements.mediaFile.files?.[0];
+  const file = getReplyAttachment();
   const preview = document.getElementById("replyFilePreview");
   if (replyVideoJob && replyVideoJob.file !== file) resetReplyVideoJob();
+  if (replyImagePreview?.file !== file) {
+    if (replyImagePreview) URL.revokeObjectURL(replyImagePreview.url);
+    replyImagePreview = file?.type?.startsWith("image/") ? { file, url: URL.createObjectURL(file) } : null;
+  }
+  if (replyUploadCache?.file !== file) replyUploadCache = null;
   const needsVideo = file && getActiveConversation()?.channel === "whatsapp" && getMediaFileType(file) === "video" && file.size > MEDIA_UPLOAD_LIMITS.video;
   if (needsVideo && !replyVideoJob && file.size <= 100 * 1024 * 1024) {
     const job = { file, controller: new AbortController(), status: "Preparando video…", prepared: null, error: "", url: "" };
@@ -1629,7 +1659,7 @@ function renderReplyFilePreview() {
   }
   preview.hidden = !file;
   const job = replyVideoJob?.file === file ? replyVideoJob : null;
-  preview.innerHTML = file ? `<div class="reply-file-details"><span>${escapeHtml(file.name)} <small>${formatBytes(file.size)}</small></span>${job ? `<span class="video-preparation-status ${job.error ? "is-error" : ""}" role="status">${escapeHtml(job.status)}</span>${job.prepared ? `<a class="prepared-video-download" href="${job.url}" download="${escapeHtml(job.prepared.name)}">Guardar copia preparada</a>` : ""}${job.error ? '<button class="secondary-button compact" type="button" data-retry-reply-video>Reintentar preparación</button>' : ""}` : ""}</div><button class="chat-icon-button" type="button" data-remove-reply-file aria-label="Quitar archivo">${crmIcon("close")}</button>` : "";
+  preview.innerHTML = file ? `${replyImagePreview ? `<img class="reply-image-preview" src="${replyImagePreview.url}" alt="Vista previa de la imagen para enviar" />` : ""}<div class="reply-file-details"><span>${escapeHtml(file.name)} <small>${formatBytes(file.size)}</small></span>${job ? `<span class="video-preparation-status ${job.error ? "is-error" : ""}" role="status">${escapeHtml(job.status)}</span>${job.prepared ? `<a class="prepared-video-download" href="${job.url}" download="${escapeHtml(job.prepared.name)}">Guardar copia preparada</a>` : ""}${job.error ? '<button class="secondary-button compact" type="button" data-retry-reply-video>Reintentar preparación</button>' : ""}` : ""}</div><button class="chat-icon-button" type="button" data-remove-reply-file aria-label="Quitar archivo">${crmIcon("close")}</button>` : "";
   form.elements.text.style.height = "auto";
   updateReplyActions(getActiveConversation());
 }
@@ -2620,7 +2650,7 @@ function openWhatsAppDraft() {
     return;
   }
   const text = form.elements.text.value.trim();
-  const mediaFile = form.elements.mediaFile.files?.[0] || null;
+  const mediaFile = getReplyAttachment();
   if (!text && !mediaFile) {
     toast("Escribe un mensaje o selecciona un archivo");
     return;
@@ -2925,10 +2955,31 @@ document.getElementById("sidebarToggle")?.addEventListener("click", toggleSideba
 document.querySelector("#replyForm input[name='mediaFile']")?.addEventListener("change", (event) => {
   const form = document.getElementById("replyForm");
   const file = event.currentTarget.files?.[0] || null;
-  if (!form || !file) return;
-  form.elements.mediaType.value = getMediaFileType(file, form.elements.mediaType.value);
+  if (!form) return;
+  replyAttachmentFile = file;
+  replyUploadCache = null;
+  setReplyFeedback();
+  if (file) form.elements.mediaType.value = getMediaFileType(file, form.elements.mediaType.value);
   renderReplyFilePreview();
   form.querySelector(".composer-attachments").open = false;
+});
+document.getElementById("replyForm").addEventListener("paste", event => {
+  const form = event.currentTarget;
+  if (!getActiveConversation() || form.classList.contains("is-sending")) return;
+  const clipboard = event.clipboardData;
+  const item = [...(clipboard?.items || [])].find(item => item.kind === "file" && item.type.startsWith("image/"));
+  const image = item?.getAsFile() || [...(clipboard?.files || [])].find(file => file.type.startsWith("image/"));
+  if (!image) return; // Preserve normal text paste and never fetch clipboard URLs.
+  event.preventDefault();
+  const mediaError = validateMediaUpload(image, "image", getActiveConversation().channel);
+  if (mediaError) { setReplyFeedback(mediaError, "error"); return; }
+  const extension = ({ "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" })[image.type] || "png";
+  replyAttachmentFile = new File([image], `imagen-pegada-${Date.now()}.${extension}`, { type: image.type });
+  form.elements.mediaFile.value = "";
+  form.elements.mediaType.value = "image";
+  replyUploadCache = null;
+  setReplyFeedback("Imagen pegada. Revisa la vista previa y pulsa Enviar.");
+  renderReplyFilePreview();
 });
 document.getElementById("statusFilter").addEventListener("change", renderPerformance);
 document.getElementById("syncAds").addEventListener("click", syncAdsFromMeta);
@@ -3117,7 +3168,8 @@ document.addEventListener("click", event => {
   }
   if (event.target.closest("[data-retry-reply-video]")) { resetReplyVideoJob(); renderReplyFilePreview(); }
   if (event.target.closest("[data-remove-reply-file]")) {
-    document.querySelector('#replyForm input[name="mediaFile"]').value = ""; renderReplyFilePreview();
+    replyAttachmentFile = null; replyUploadCache = null;
+    document.querySelector('#replyForm input[name="mediaFile"]').value = ""; setReplyFeedback(); renderReplyFilePreview();
   }
   if (event.target.closest("[data-toggle-thread-search]")) {
     const bar = document.getElementById("threadSearchBar");
@@ -3231,10 +3283,11 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
   event.preventDefault();
   const conversation = (state.conversations || []).find((item) => item.id === activeConversationId);
   const form = event.currentTarget;
+  if (form.classList.contains("is-sending")) return;
   const sendApiButton = document.getElementById("sendApiButton");
   const originalButtonText = sendApiButton?.textContent || "Enviar API Meta";
   const text = form.elements.text.value.trim();
-  const originalMediaFile = form.elements.mediaFile.files?.[0] || null;
+  const originalMediaFile = getReplyAttachment();
   const mediaFile = conversation?.channel === "whatsapp" && replyVideoJob?.file === originalMediaFile && replyVideoJob.prepared ? replyVideoJob.prepared : originalMediaFile;
   const selectedMediaType = form.elements.mediaType.value;
   const mediaType = mediaFile ? getMediaFileType(mediaFile, selectedMediaType) : normalizeMediaType(selectedMediaType);
@@ -3246,21 +3299,22 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
   }
   const mediaError = validateMediaUpload(mediaFile, mediaType, conversation.channel);
   if (mediaError) {
-    toast(mediaError);
+    setReplyFeedback(mediaError, "error");
     return;
   }
   if (conversation.channel === "whatsapp" && !remoteConfig.whatsappSendApiConfigured) {
-    openWhatsAppDraft();
+    setReplyFeedback("La conexión de WhatsApp no está lista para enviar. El archivo se conserva.", "error");
     return;
   }
   try {
+    setReplyFeedback(mediaFile ? "Subiendo archivo…" : "Enviando mensaje…");
     form.classList.add("is-sending");
     if (sendApiButton) {
       sendApiButton.disabled = true;
       sendApiButton.textContent = mediaFile ? "Subiendo archivo..." : "Enviando...";
     }
-    let uploadedMedia = null;
-    if (mediaFile) {
+    let uploadedMedia = replyUploadCache?.file === originalMediaFile && replyUploadCache.conversationId === conversation.id ? replyUploadCache.media : null;
+    if (mediaFile && !uploadedMedia) {
       toast(`Subiendo ${mediaType === "document" ? "documento" : mediaType === "video" ? "video" : "archivo"}...`);
       const uploadForm = new FormData();
       uploadForm.append("file", mediaFile);
@@ -3273,11 +3327,13 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
           channel: conversation.channel, conversationId: conversation.id,
           requestJson: (path, body) => api(path, { method: "POST", body: JSON.stringify(body) }),
           requestForm: apiForm,
-          onProgress: status => { if (sendApiButton) sendApiButton.textContent = status; },
+          onProgress: status => { setReplyFeedback(status); if (sendApiButton) sendApiButton.textContent = status; },
         });
       } else uploadedMedia = await apiForm("/api/media/upload", uploadForm);
+      replyUploadCache = { file: originalMediaFile, conversationId: conversation.id, media: uploadedMedia };
       if (sendApiButton) sendApiButton.textContent = "Enviando...";
     }
+    setReplyFeedback("Enviando mensaje…");
     const payload = {
         channel: conversation.channel,
         conversationId: conversation.id,
@@ -3302,7 +3358,9 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
     }
     const remoteState = await api("/api/messages", { method: "POST", body: JSON.stringify(payload) });
     form.reset();
+    replyAttachmentFile = null; replyUploadCache = null;
     renderReplyFilePreview();
+    setReplyFeedback("Mensaje aceptado por el canal.");
     applyRemoteState(remoteState);
     render();
     scheduleFreshSync(1200);
@@ -3311,12 +3369,10 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
   } catch (error) {
     console.error(error);
     if (conversation.channel === "whatsapp" && isWhatsAppPermissionError(error)) {
-      remoteConfig.whatsappSendApiConfigured = false;
-      updateReplyActions(conversation);
-      openWhatsAppDraft();
+      setReplyFeedback("No se envió: Meta no autorizó el envío desde la cuenta de WhatsApp de Bormex. Tu mensaje y archivo se conservan para reintentar cuando se corrija la conexión.", "error");
       return;
     }
-    toast(error.message);
+    setReplyFeedback(`No se envió: ${error.message}. Tu mensaje y archivo se conservan.`, "error");
   } finally {
     form.classList.remove("is-sending");
     if (sendApiButton) {
