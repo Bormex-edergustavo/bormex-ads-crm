@@ -4250,7 +4250,7 @@ function updateReplyActions(conversation) {
 
   const isWhatsApp = conversation?.channel === "whatsapp";
   const mediaStatus = document.getElementById("replyMediaStatus");
-  if (mediaStatus) mediaStatus.textContent = conversation?.channel === "instagram"
+  if (mediaStatus) mediaStatus.textContent = !conversation ? "Selecciona una conversación para enviar fotos o videos." : conversation?.channel === "instagram"
     ? "Instagram: fotos hasta 8 MB; videos y audio hasta 25 MB."
     : conversation?.channel === "messenger" ? "Messenger: fotos hasta 8 MB; videos y archivos hasta 25 MB."
     : "WhatsApp: fotos hasta 5 MB; videos y audio hasta 16 MB; documentos hasta 100 MB.";

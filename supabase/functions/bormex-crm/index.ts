@@ -4132,12 +4132,18 @@ async function uploadCrmMedia(form: FormData) {
   if (channel === "instagram" && type === "document") throw new HttpError(400, "Instagram permite fotos, videos y audio en este formulario");
   const limit = channel === "whatsapp" ? mediaUploadLimit(type) : (type === "image" ? 8 : 25) * 1024 * 1024;
   if (file.size > limit) throw new HttpError(400, `El límite para este archivo es ${formatMegabytes(limit)}`);
+  // Keep the existing WhatsApp route for documents beyond the Storage plan limit.
+  if (channel === "whatsapp" && file.size > 50 * 1024 * 1024) return uploadWhatsAppMedia(form);
   if (channel !== "whatsapp") await socialTarget(channel);
   const bucket = await crmStorageFetch(`/bucket/${CRM_MEDIA_BUCKET}`);
   if (bucket.status === 404 || bucket.status === 400) {
     const created = await crmStorageFetch("/bucket", { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: CRM_MEDIA_BUCKET, name: CRM_MEDIA_BUCKET, public: false, file_size_limit: 104857600 }) });
-    if (!created.ok && created.status !== 409) throw new HttpError(502, "No se pudo preparar el almacenamiento privado");
+      body: JSON.stringify({ id: CRM_MEDIA_BUCKET, name: CRM_MEDIA_BUCKET, public: false, file_size_limit: 52428800 }) });
+    if (!created.ok && created.status !== 409) {
+      const detail = await created.json().catch(() => ({}));
+      console.error("crm_media_bucket", created.status, detail.message || detail.error || "");
+      throw new HttpError(502, "No se pudo preparar el almacenamiento privado");
+    }
   } else if (!bucket.ok) throw new HttpError(502, "No se pudo comprobar el almacenamiento privado");
   const filename = (file.name || `archivo.${extensionForMedia(file.type, type)}`).replace(/[^a-zA-Z0-9_.-]/g, "_").slice(-120) || "archivo";
   const storagePath = `uploads/${crypto.randomUUID()}/${filename}`;

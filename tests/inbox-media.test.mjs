@@ -24,7 +24,7 @@ function harness(overrides={}) {
     }
     if(url.hostname==='storage.test'&&url.pathname.startsWith('/storage/v1/')){
       if(url.pathname==='/storage/v1/bucket/bormex-crm-media')return response({},bucket?200:404);
-      if(url.pathname==='/storage/v1/bucket'){assert.equal(JSON.parse(options.body).public,false);bucket=true;return response({});}
+      if(url.pathname==='/storage/v1/bucket'){assert.equal(JSON.parse(options.body).public,false);assert(JSON.parse(options.body).file_size_limit<=50*1024*1024);bucket=true;return response({});}
       if(url.pathname.includes('/object/sign/'))return response({signedURL:'/object/sign/bormex-crm-media/a?token=temporary'});
       if(url.pathname==='/storage/v1/object/sign/bormex-crm-media/a')return new Response('binary',{headers:{'content-type':'image/png'}});
       if(method==='POST'&&url.pathname.includes('/object/'))return response({Key:'file'});
