@@ -11,7 +11,7 @@ function harness(overrides={}) {
   const env={PANEL_PASSWORD:'test-password',SUPABASE_URL:'https://storage.test',SUPABASE_SERVICE_ROLE_KEY:'test-service',MESSENGER_PAGE_ACCESS_TOKEN:'page-token',MESSENGER_PAGE_ID:'page123',INSTAGRAM_ACCOUNT_ID:'ig123',INSTAGRAM_ACCESS_TOKEN:'ig-token',WHATSAPP_SEND_ACCESS_TOKEN:'wa-send',WHATSAPP_PHONE_NUMBER_ID:'wa123',...overrides};
   const tables={bormex_conversations:new Map(),bormex_messages:new Map(),bormex_settings:new Map()};
   for(const channel of ['whatsapp','messenger','instagram'])tables.bormex_conversations.set(`${channel}_contact`,{id:`${channel}_contact`,channel,contactId:'contact',phone:'521234567890',name:'Prueba',tags:['keep'],unread:3,lastAt:'2026-10-27T12:00:00Z'});
-  const calls=[];let handler,bucket=false,sequence=0;
+  const calls=[];const storedObjects=new Map();let handler,bucket=false,sequence=0;
   const response=(x,status=200,headers={})=>new Response(JSON.stringify(x),{status,headers:{'content-type':'application/json',...headers}});
   const fetch=async(input,options={})=>{
     const url=new URL(input);const method=options.method||'GET';calls.push({url:String(url),method,options});
@@ -27,7 +27,9 @@ function harness(overrides={}) {
       if(url.pathname==='/storage/v1/bucket'){assert.equal(JSON.parse(options.body).public,false);assert(JSON.parse(options.body).file_size_limit<=50*1024*1024);bucket=true;return response({});}
       if(url.pathname.includes('/object/sign/'))return response({signedURL:'/object/sign/bormex-crm-media/a?token=temporary'});
       if(url.pathname==='/storage/v1/object/sign/bormex-crm-media/a')return new Response('binary',{headers:{'content-type':'image/png'}});
-      if(method==='POST'&&url.pathname.includes('/object/'))return response({Key:'file'});
+      if(method==='GET'&&url.pathname.startsWith('/storage/v1/object/authenticated/')){const k=url.pathname.replace('/storage/v1/object/authenticated/','');return storedObjects.has(k)?new Response(storedObjects.get(k)):response({},404);}
+      if(method==='DELETE'&&url.pathname==='/storage/v1/object/bormex-crm-media'){for(const k of JSON.parse(options.body).prefixes)storedObjects.delete('bormex-crm-media/'+k);return response({});}
+      if(method==='POST'&&url.pathname.includes('/object/')){storedObjects.set(url.pathname.replace('/storage/v1/object/',''),options.body);return response({Key:'file'});}
     }
     if(['graph.facebook.com','graph.instagram.com'].includes(url.hostname)){
       if(url.pathname.endsWith('/messages')&&method==='POST')return response({message_id:`mid${++sequence}`,messages:[{id:`mid${sequence}`} ]});
@@ -48,7 +50,7 @@ function harness(overrides={}) {
   const upload=async(channel,type='image/png',name='foto.png',size=10)=>{
     const f=new FormData();f.set('channel',channel);f.set('conversationId',`${channel}_contact`);f.set('file',new File([new Uint8Array(size)],name,{type}));return request('/api/media/upload','POST',f);
   };
-  return{c,env,tables,calls,request,upload};
+  return{c,env,tables,calls,request,upload,storedObjects};
 }
 await test('Protected upload, media and inbox reject unauthenticated requests',async()=>{
   const h=harness();for(const [path,method]of [['/api/media/upload','POST'],['/api/media/message/id/0/photo.jpg','GET'],['/api/meta/inbox/sync','POST']])assert.equal((await h.request(path,method,undefined,false)).status,401);
@@ -81,6 +83,58 @@ await test('An explicit owner-selected credential source uses the verified pair'
 await test('An incomplete explicitly selected pair fails without another token',()=>{const h=harness({WHATSAPP_SEND_CREDENTIALS_SOURCE:'paired_media'});assert.throws(()=>h.c.whatsappSendAccessToken());});
 await test('Messenger webhook accepts only the configured business page',()=>{const h=harness();const event={sender:{id:'customer'},recipient:{id:'page123'},timestamp:1793200000000,message:{mid:'business-msg',text:'Cotización'}};const r=h.c.extractMetaMessagingEvents({object:'page',entry:[{id:'page123',messaging:[event]},{id:'personal-eder',messaging:[{...event,message:{mid:'personal-msg',text:'Personal'}}]}]});assert.equal(r.messages.length,1);assert.equal(r.messages[0].id,'business-msg');assert.equal(r.conversations[0].businessAccountId,'page123');});
 await test('Instagram webhook rejects a different Instagram account',()=>{const h=harness();const r=h.c.extractMetaMessagingEvents({object:'instagram',entry:[{id:'personal-instagram',messaging:[{sender:{id:'customer'},recipient:{id:'personal-instagram'},message:{mid:'personal',text:'Personal'}}]}]});assert.equal(r.messages.length,0);});
+
+await test('Business contact sync reads nested contacts and ignores other state types',()=>{
+  const h=harness();const payload=h.c.extractWhatsAppEvents({entry:[{changes:[{field:'smb_app_state_sync',value:{state_sync:[
+    {type:'contact',action:'add',metadata:{timestamp:'1793188800'},contact:{phone_number:'521234567890',full_name:'Nombre de agenda'}},
+    {type:'label',action:'add',contact:{phone_number:'529999999999',full_name:'No es contacto'}}
+  ]}}]}]});
+  assert.equal(payload.conversations.length,1);const contact=payload.conversations[0];
+  assert.equal(contact.whatsappContactName,'Nombre de agenda');assert.equal(contact.whatsappContactUpdatedAt,new Date(1793188800000).toISOString());
+  for(const field of ['lastMessage','lastAt','unread','unreadDelta'])assert(!Object.hasOwn(contact,field));
+  const legacy=h.c.getWhatsAppContactSyncItems({contacts:[{wa_id:'521234567890',full_name:'Anterior'}]});assert.equal(legacy.length,1);
+});
+await test('Saved business names, lists and tags survive public profiles and numeric echoes',()=>{
+  const h=harness();const saved={id:'whatsapp_521234567890',channel:'whatsapp',phone:'521234567890',name:'Mi cliente',whatsappContactName:'Mi cliente',tags:['crm-tag'],whatsappLists:['wa-list'],unread:2,lastAt:'2026-10-20T12:00:00Z',lastMessage:'Pedido'};
+  for(const incoming of [{name:'521234567890',phone:saved.phone},{name:'Perfil público',whatsappProfileName:'Perfil público',unreadDelta:1}]){
+    const merged=h.c.mergeConversationData(saved,incoming);assert.equal(merged.name,'Mi cliente');assert.equal(merged.tags[0],'crm-tag');assert.equal(merged.whatsappLists[0],'wa-list');
+  }
+  assert.equal(h.c.mergeConversationData({...saved,customName:'Nombre CRM'},{name:'Perfil público'}).name,'Nombre CRM');
+  assert.equal(h.c.mergeConversationData({...saved,whatsappContactName:''},{name:saved.phone,phone:saved.phone}).name,'Mi cliente');
+});
+await test('Contact metadata updates preserve chat activity and removals keep history',()=>{
+  const h=harness();const before={id:'whatsapp_521234567890',channel:'whatsapp',phone:'521234567890',name:'Nombre anterior',whatsappContactName:'Nombre anterior',whatsappProfileName:'Perfil',tags:['keep'],whatsappLists:['list'],unread:4,lastAt:'2026-10-20T12:00:00Z',lastMessage:'Cotización'};
+  const updated=h.c.mergeConversationData(before,{whatsappContactName:'Nombre nuevo',whatsappContactUpdatedAt:'2026-10-28T12:00:00Z'});
+  assert.equal(updated.name,'Nombre nuevo');for(const field of ['lastAt','lastMessage','unread'])assert.equal(updated[field],before[field]);
+  const removed=h.c.mergeConversationData(before,{whatsappContactName:'',whatsappContactRemoved:true});assert.equal(removed.name,'Perfil');assert.equal(removed.lastMessage,'Cotización');assert.equal(removed.tags[0],'keep');
+  const patched=h.c.normalizeConversationPatch({...updated,crmNote:'Nota'});assert.equal(patched.whatsappContactName,'Nombre nuevo');assert.equal(patched.whatsappLists[0],'list');
+  const stale=h.c.mergeConversationData({...updated,whatsappContactUpdatedAt:'2026-10-28T12:00:00Z'},{name:'Anterior',whatsappContactName:'Anterior',whatsappContactUpdatedAt:'2026-10-27T12:00:00Z'});assert.equal(stale.name,'Nombre nuevo');
+});
+
+await test('Chunk upload routes require auth and permit the sales role',async()=>{
+  const h=harness();for(const suffix of ['session','part','finish','cancel']){const path='/api/media/upload/'+suffix;assert.equal((await h.request(path,'POST',{},false)).status,401);assert(h.c.isPathAllowed(path,'POST','sales'));}
+});
+await test('Chunk sessions validate channel and provider limits before storage writes',async()=>{
+  const h=harness();for(const body of [{channel:'whatsapp',conversationId:'whatsapp_contact',size:17*1024*1024,filename:'v.mp4',mimeType:'video/mp4'},{channel:'whatsapp',conversationId:'instagram_contact',size:10,filename:'v.mp4',mimeType:'video/mp4'}])assert.equal((await h.request('/api/media/upload/session','POST',body)).status,400);
+  assert(!h.calls.some(c=>c.url.includes('/storage/v1/')));
+});
+await test('Chunk assembly preserves all bytes, uploads once and cleans private staging',async()=>{
+  const h=harness();const size=1024*1024+7;
+  const session=await(await h.request('/api/media/upload/session','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',filename:'complete.mp4',mimeType:'video/mp4',size})).json();assert.equal(session.parts,2);
+  for(let i=0;i<2;i++){const form=new FormData();form.set('uploadId',session.uploadId);form.set('index',String(i));form.set('file',new File([new Uint8Array(i?7:1024*1024).fill(i+1)],'part.bin'));const r=await h.request('/api/media/upload/part','POST',form);assert.equal(r.status,200,await r.clone().text());}
+  const one=await h.request('/api/media/upload/finish','POST',{uploadId:session.uploadId});assert.equal(one.status,200,await one.clone().text());const first=await one.json();
+  const second=await(await h.request('/api/media/upload/finish','POST',{uploadId:session.uploadId})).json();assert.equal(first.mediaId,second.mediaId);
+  assert.equal(h.calls.filter(c=>c.url.includes('graph.facebook.com')&&c.url.endsWith('/media')).length,1);
+  assert(![...h.storedObjects.keys()].some(k=>k.includes('/staging/')));
+  const file=h.storedObjects.get('bormex-crm-media/'+first.storagePath);const bytes=new Uint8Array(await file.arrayBuffer());assert.equal(bytes.length,size);assert.equal(bytes[0],1);assert.equal(bytes.at(-1),2);
+});
+await test('Incomplete or invalid chunks cannot reach Meta; cancellation removes staging',async()=>{
+  const h=harness();const session=await(await h.request('/api/media/upload/session','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',filename:'v.mp4',mimeType:'video/mp4',size:1024*1024+7})).json();
+  const f=new FormData();f.set('uploadId',session.uploadId);f.set('index','0');f.set('file',new File([new Uint8Array(5)],'bad.bin'));assert.equal((await h.request('/api/media/upload/part','POST',f)).status,400);
+  assert.equal((await h.request('/api/media/upload/finish','POST',{uploadId:session.uploadId})).status,400);assert(!h.calls.some(c=>c.url.includes('graph.facebook.com')));
+  assert.equal((await h.request('/api/media/upload/cancel','POST',{uploadId:session.uploadId})).status,200);assert.equal((await h.request('/api/media/upload/finish','POST',{uploadId:session.uploadId})).status,404);
+  assert.equal((await h.request('/api/media/upload/finish','POST',{uploadId:'../../private'})).status,400);
+});
 
 for(const check of checks)console.log(check.pass?'PASS':'FAIL',check.name,check.error||'');
 if(checks.some(c=>!c.pass))process.exitCode=1;

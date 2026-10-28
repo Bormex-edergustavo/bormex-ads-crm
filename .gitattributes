@@ -1,0 +1,3 @@
+# Preserve the upstream distribution byte for byte.
+vendor/** -whitespace
+docs/vendor/** -whitespace

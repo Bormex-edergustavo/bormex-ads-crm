@@ -1,0 +1,8 @@
+@ffmpeg/ffmpeg 0.12.15 (MIT) and @ffmpeg/core 0.12.10 (GPL-2.0-or-later).
+JavaScript distributions are unmodified. The original WASM is split for delivery and reassembled byte for byte; manifest.json contains its size and SHA256.
+Upstream source, build recipes and dependency source locations:
+https://github.com/ffmpegwasm/ffmpeg.wasm/tree/v12.15/packages
+https://github.com/ffmpegwasm/ffmpeg.wasm/tree/v0.12.10/build
+https://github.com/ffmpegwasm/ffmpeg.wasm/blob/main/LICENSE
+FFmpeg source and license: https://ffmpeg.org/legal.html
+These assets run only when preparing a video. No video content is sent to FFmpeg or a third-party conversion service.

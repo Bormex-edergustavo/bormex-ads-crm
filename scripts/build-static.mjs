@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile, cp } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,6 +29,9 @@ async function writeStaticFiles(targetDir) {
     writeFile(join(targetDir, "styles.css"), css),
     writeFile(join(targetDir, "app.js"), js),
     writeFile(join(targetDir, "privacy.html"), privacy),
+    cp(join(root, "video-tools.js"), join(targetDir, "video-tools.js")),
+    cp(join(root, "upload-tools.js"), join(targetDir, "upload-tools.js")),
+    cp(join(root, "vendor"), join(targetDir, "vendor"), { recursive: true }),
   ]);
 }
 

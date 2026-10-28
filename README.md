@@ -26,6 +26,29 @@ el rol y la salida. El botón + del mensaje abre archivos y el acceso a WhatsApp
 los límites y las rutas de envío se mantienen. Las marcas de entrega/lectura se
 muestran únicamente cuando el estado guardado de Meta las acredita.
 
+## Videos grandes y nombres de WhatsApp (28-oct-2026)
+
+Al seleccionar un video de WhatsApp de más de 16 MiB (hasta 100 MiB), el CRM
+prepara una copia MP4 H.264/AAC en el dispositivo, antes de la subida. Conserva
+el original, muestra progreso, permite cancelar y ofrece guardar la copia.
+La herramienta se descarga sólo cuando hace falta. Los adjuntos de más de 2 MiB
+y hasta 50 MiB se suben en partes privadas de 1 MiB, con progreso y reintentos.
+El servidor comprueba todas las partes antes de aceptar el archivo, elimina las
+partes temporales y reutiliza el resultado de una finalización ya completada al reintentar. Para reconstruir sus archivos:
+`npm ci && npm run build:video && npm run build:static`.
+Las licencias y los enlaces al código fuente están en `vendor/`.
+
+El receptor admite el formato oficial `state_sync[].contact` y distingue el nombre
+de la agenda comercial del perfil público. Los mensajes numéricos o ecos no
+reemplazan el nombre guardado. Los cambios de contacto no alteran la última
+actividad, las etiquetas ni los no leídos. La recepción real de esos eventos
+depende de la conexión Coexistence; no se da por probada por las pruebas locales.
+
+La conexión oficial no sincroniza las etiquetas/listas ni los grupos existentes
+de la app WhatsApp Business. No se copiaron listas manualmente. Se mantiene la API oficial por instrucción del propietario; no se activa
+un conector de sesión alternativo.
+Referencia: https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users
+
 ## Fotos, videos y bandejas de Meta (28-oct-2026)
 
 El formulario admite archivos del dispositivo en WhatsApp, Messenger e Instagram.

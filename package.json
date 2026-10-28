@@ -6,7 +6,12 @@
   "scripts": {
     "build:edge": "node scripts/build-edge.mjs",
     "build:static": "node scripts/build-static.mjs",
-    "check": "node --check server.mjs && node --check app.js && node scripts/build-edge.mjs",
-    "test": "node tests/inbox-media.test.mjs"
+    "check": "node --check server.mjs && node --check app.js && node --check video-tools.js && node --check upload-tools.js && node scripts/build-edge.mjs",
+    "test": "node tests/video-tools.test.mjs && node tests/upload-tools.test.mjs && node tests/inbox-media.test.mjs",
+    "build:video": "node scripts/build-video.mjs"
+  },
+  "dependencies": {
+    "@ffmpeg/core": "0.12.10",
+    "@ffmpeg/ffmpeg": "0.12.15"
   }
 }

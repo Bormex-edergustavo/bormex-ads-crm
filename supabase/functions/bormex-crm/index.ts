@@ -186,6 +186,11 @@ Deno.serve(async (req) => {
       return json(await syncSocialInbox(await readJson(req)));
     }
 
+    if (pathname === "/api/media/upload/session" && req.method === "POST") return json(await startCrmUpload(await readJson(req)));
+    if (pathname === "/api/media/upload/part" && req.method === "POST") return json(await uploadCrmPart(await req.formData()));
+    if (pathname === "/api/media/upload/finish" && req.method === "POST") return json(await finishCrmUpload(await readJson(req)));
+    if (pathname === "/api/media/upload/cancel" && req.method === "POST") { await cancelCrmUpload(await readJson(req)); return json({ ok: true }); }
+
     if (pathname === "/api/media/upload" && req.method === "POST") {
       return json(await uploadCrmMedia(await req.formData()));
     }
@@ -497,7 +502,7 @@ function isPathAllowed(pathname: string, method: string, role: string) {
   if (method === "GET" && pathname.startsWith("/api/media/whatsapp/")) return true;
   if (method === "POST" && pathname === "/api/messages") return true;
   if (method === "POST" && pathname === "/api/media/whatsapp") return true;
-  if (method === "POST" && pathname === "/api/media/upload") return true;
+  if (method === "POST" && ["/api/media/upload", "/api/media/upload/session", "/api/media/upload/part", "/api/media/upload/finish", "/api/media/upload/cancel"].includes(pathname)) return true;
   if (method === "GET" && pathname.startsWith("/api/media/message/")) return true;
   if (method === "POST" && pathname === "/api/meta/inbox/sync") return true;
   if (method === "POST" && pathname.startsWith("/api/conversations/")) return true;
@@ -855,6 +860,11 @@ function mergeConversationData(existing: any, incoming: Record<string, unknown>)
     "crmNote",
     "customName",
     "avatarUrl",
+    "whatsappContactName",
+    "whatsappProfileName",
+    "whatsappContactUpdatedAt",
+    "whatsappContactRemoved",
+    "whatsappLists",
   ]) {
     if (!Object.prototype.hasOwnProperty.call(incoming, field) && existing?.[field] !== undefined) {
       merged[field] = existing[field];
@@ -885,6 +895,12 @@ function mergeConversationData(existing: any, incoming: Record<string, unknown>)
   delete merged.unreadDelta;
   delete merged.unreadReset;
   merged.tags = normalizeTagIds(merged.tags);
+  if (Date.parse(String(incoming.whatsappContactUpdatedAt || "")) < Date.parse(String(existing?.whatsappContactUpdatedAt || ""))) {
+    for (const field of ["whatsappContactName", "whatsappContactUpdatedAt", "whatsappContactRemoved", "name"]) merged[field] = existing[field];
+  }
+  if (existing?.name && (!incoming.name || isContactIdentifier(incoming.name, incoming.phone || incoming.contactId))) merged.name = existing.name;
+  if (merged.whatsappContactName) merged.name = String(merged.whatsappContactName);
+  if (incoming.whatsappContactRemoved === true && !merged.whatsappContactName) merged.name = String(merged.whatsappProfileName || merged.phone || merged.contactId || "");
   if (merged.customName) merged.name = String(merged.customName);
   merged.updatedAt = String(incoming.updatedAt || new Date().toISOString());
   return merged;
@@ -910,6 +926,11 @@ function normalizeConversationPatch(body: any) {
     phone,
     name: String(body.name || contactId || phone || ""),
     customName: String(body.customName || ""),
+    whatsappContactName: String(body.whatsappContactName || ""),
+    whatsappProfileName: String(body.whatsappProfileName || ""),
+    whatsappContactUpdatedAt: String(body.whatsappContactUpdatedAt || ""),
+    whatsappContactRemoved: body.whatsappContactRemoved === true,
+    whatsappLists: normalizeTagIds(body.whatsappLists),
     avatarUrl: String(body.avatarUrl || body.avatar_url || body.profilePic || body.profile_pic || body.picture || ""),
     lastMessage: String(body.lastMessage || body.last_message || ""),
     lastAt: String(body.lastAt || body.last_at || new Date().toISOString()),
@@ -2320,20 +2341,14 @@ function extractWhatsAppEvents(payload: any) {
             "",
         );
         if (!phone) continue;
-        const name = contact.profile?.name || contact.full_name || contact.contact_full_name || contact.CONTACT_FULL_NAME || contact.name || phone;
-        const at = timestampToIso(
-          contact.timestamp || contact.change_timestamp || contact.contact_change_timestamp || contact.CONTACT_CHANGE_TIMESTAMP || contact.updated_at,
-        );
+        const removed = ["remove", "delete", "deleted"].includes(String(contact.action || contact.ACTION || "").toLowerCase());
+        const name = removed ? "" : String(contact.full_name || contact.contact_full_name || contact.CONTACT_FULL_NAME || contact.name || contact.profile?.name || "").trim();
+        const at = timestampToIso(contact.timestamp || contact.change_timestamp || contact.contact_change_timestamp || contact.CONTACT_CHANGE_TIMESTAMP || contact.updated_at);
         conversations.push({
-          id: `whatsapp_${phone}`,
-          channel: "whatsapp",
-          contactId: phone,
-          phone,
-          name,
+          id: `whatsapp_${phone}`, channel: "whatsapp", contactId: phone, phone,
+          ...(name ? { name } : {}),
+          whatsappContactName: name, whatsappContactUpdatedAt: at, whatsappContactRemoved: removed,
           avatarUrl: extractWhatsAppContactAvatarUrl(contact),
-          lastMessage: contact.action === "remove" ? "Contacto eliminado en WhatsApp Business App" : "Contacto sincronizado desde WhatsApp Business App",
-          lastAt: at,
-          unread: 0,
         });
       }
       for (const message of getWhatsAppMessageItems(value)) {
@@ -2354,6 +2369,7 @@ function extractWhatsAppEvents(payload: any) {
           contactId: phone,
           phone,
           name: contact.profile?.name || phone,
+          ...(contact.profile?.name ? { whatsappProfileName: String(contact.profile.name) } : {}),
           avatarUrl: extractWhatsAppContactAvatarUrl(contact),
           lastMessage: textBody,
           lastAt: at,
@@ -3203,24 +3219,22 @@ function chunk<T>(values: T[], size: number) {
   return chunks;
 }
 
+function isContactIdentifier(name: unknown, identifier: unknown) {
+  const text = String(name || "").trim();
+  return !text || text === String(identifier || "") || /^\+?[\d\s()-]+$/.test(text);
+}
+
 function getWhatsAppContactSyncItems(value: any) {
-  const candidates = [
-    value.contacts,
-    value.contact,
-    value.smb_app_state_sync?.contacts,
-    value.smb_app_state_sync?.data?.contacts,
-    value.smb_app_state_sync?.payload?.contacts,
-  ];
-  return candidates.flatMap((candidate) => {
-    if (Array.isArray(candidate)) return candidate;
-    if (candidate && typeof candidate === "object") return [candidate];
-    return [];
-  }).filter((contact) => {
-    if (!contact || typeof contact !== "object") return false;
-    const hasPhone = Boolean(contact.wa_id || contact.phone_number || contact.contact_phone_number || contact.CONTACT_PHONE_NUMBER || contact.phone || contact.number);
-    const hasSyncShape = Boolean(contact.action || contact.ACTION || contact.full_name || contact.contact_full_name || contact.CONTACT_FULL_NAME || contact.profile?.name);
-    return hasPhone && hasSyncShape;
-  });
+  const flattened = [value.contacts, value.contact, value.smb_app_state_sync?.contacts,
+    value.smb_app_state_sync?.data?.contacts, value.smb_app_state_sync?.payload?.contacts]
+    .flatMap(candidate => Array.isArray(candidate) ? candidate : candidate && typeof candidate === "object" ? [candidate] : []);
+  const stateItems = [value.state_sync, value.smb_app_state_sync?.state_sync].flatMap(items => Array.isArray(items) ? items : []);
+  for (const item of stateItems) {
+    if (String(item?.type || "").toLowerCase() !== "contact" || !item.contact) continue;
+    flattened.push({ ...item.contact, action: item.action || item.contact.action, timestamp: item.metadata?.timestamp || item.timestamp || item.contact.timestamp });
+  }
+  return flattened.filter(contact => contact && typeof contact === "object" &&
+    Boolean(contact.wa_id || contact.phone_number || contact.contact_phone_number || contact.CONTACT_PHONE_NUMBER || contact.phone || contact.number));
 }
 
 function getWhatsAppMessageItems(value: any) {
@@ -4212,6 +4226,101 @@ async function signedCrmMediaUrl(path: string) {
   return `${Deno.env.get("SUPABASE_URL")}/storage/v1${payload.signedURL}`;
 }
 
+async function ensureCrmMediaBucket() {
+  const bucket = await crmStorageFetch(`/bucket/${CRM_MEDIA_BUCKET}`);
+  if (bucket.status === 404 || bucket.status === 400) {
+    const created = await crmStorageFetch("/bucket", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: CRM_MEDIA_BUCKET, name: CRM_MEDIA_BUCKET, public: false, file_size_limit: 52428800 }) });
+    if (!created.ok && created.status !== 409) {
+      const detail = await created.json().catch(() => ({}));
+      console.error("crm_media_bucket", created.status, detail.message || detail.error || "");
+      throw new HttpError(502, "No se pudo preparar el almacenamiento privado");
+    }
+  } else if (!bucket.ok) throw new HttpError(502, "No se pudo comprobar el almacenamiento privado");
+}
+
+const CRM_UPLOAD_CHUNK_SIZE = 1024 * 1024;
+function crmSessionKey(id: unknown) {
+  const text = String(id || "");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) throw new HttpError(400, "Subida no válida");
+  return `crmUpload:session:${text}`;
+}
+async function readCrmSession(id: unknown) {
+  const params = new URLSearchParams({ select: "value", key: `eq.${crmSessionKey(id)}`, limit: "1" });
+  const response = await supabaseFetch(`/rest/v1/bormex_settings?${params}`);
+  const rows = await response.json();
+  const session = rows[0]?.value;
+  if (!response.ok || !session || session.cancelled) throw new HttpError(404, "Subida no encontrada");
+  if (Date.now() > session.expiresAt) throw new HttpError(400, "La subida caducó. Selecciona el archivo de nuevo.");
+  return session;
+}
+async function startCrmUpload(body: any) {
+  const channel = String(body.channel || "");
+  const conversationId = String(body.conversationId || "");
+  const conversation = await readItemById("conversations", conversationId);
+  if (!conversation || conversation.channel !== channel) throw new HttpError(400, "Selecciona una conversación válida");
+  if (!["whatsapp", "messenger", "instagram"].includes(channel)) throw new HttpError(400, "Canal no soportado");
+  const filename = String(body.filename || "archivo").slice(0, 180);
+  const mimeType = String(body.mimeType || "application/octet-stream").slice(0, 120);
+  const type = inferMediaType(mimeType) || inferMediaType(filename) || "document";
+  const size = Number(body.size);
+  const limit = Math.min(50 * 1024 * 1024, channel === "whatsapp" ? mediaUploadLimit(type) : (type === "image" ? 8 : 25) * 1024 * 1024);
+  if (!Number.isSafeInteger(size) || size <= 0 || size > limit) throw new HttpError(400, `El límite para este archivo es ${formatMegabytes(limit)}`);
+  if (channel === "instagram" && type === "document") throw new HttpError(400, "Instagram permite fotos, videos y audio en este formulario");
+  if (channel !== "whatsapp") await socialTarget(channel);
+  await ensureCrmMediaBucket();
+  const uploadId = crypto.randomUUID();
+  const session = { uploadId, channel, conversationId, filename, mimeType, size, chunkSize: CRM_UPLOAD_CHUNK_SIZE,
+    parts: Math.ceil(size / CRM_UPLOAD_CHUNK_SIZE), expiresAt: Date.now() + 2 * 60 * 60 * 1000 };
+  await setSetting(crmSessionKey(uploadId), session);
+  return { uploadId, chunkSize: session.chunkSize, parts: session.parts };
+}
+function crmPartPath(session: any, index: number) { return `staging/${session.uploadId}/${index}.part`; }
+async function uploadCrmPart(form: FormData) {
+  const session = await readCrmSession(form.get("uploadId"));
+  if (session.result) return { ok: true, complete: true };
+  const index = Number(form.get("index"));
+  const file = form.get("file");
+  if (!Number.isSafeInteger(index) || index < 0 || index >= session.parts) throw new HttpError(400, "Parte no válida");
+  const expected = Math.min(session.chunkSize, session.size - index * session.chunkSize);
+  if (!(file instanceof File) || file.size !== expected) throw new HttpError(400, "La parte está incompleta");
+  const response = await crmStorageFetch(`/object/${CRM_MEDIA_BUCKET}/${crmPartPath(session, index)}`, {
+    method: "POST", headers: { "content-type": "application/octet-stream", "x-upsert": "true" }, body: file,
+  });
+  if (!response.ok) throw new HttpError(502, "No se pudo subir esta parte. Intenta de nuevo.");
+  return { ok: true, index };
+}
+async function cleanCrmParts(session: any) {
+  const response = await crmStorageFetch(`/object/${CRM_MEDIA_BUCKET}`, { method: "DELETE", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prefixes: Array.from({ length: session.parts }, (_, i) => crmPartPath(session, i)) }) });
+  if (!response.ok) console.error("crm_staging_cleanup", response.status);
+}
+async function finishCrmUpload(body: any) {
+  const session = await readCrmSession(body.uploadId);
+  if (session.result) return session.result;
+  const parts: Uint8Array[] = [];
+  for (let i = 0; i < session.parts; i += 1) {
+    const response = await crmStorageFetch(`/object/authenticated/${CRM_MEDIA_BUCKET}/${crmPartPath(session, i)}`);
+    if (!response.ok) throw new HttpError(400, "Faltan partes del archivo. Vuelve a intentarlo.");
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length !== Math.min(session.chunkSize, session.size - i * session.chunkSize)) throw new HttpError(400, "El archivo está incompleto");
+    parts.push(bytes);
+  }
+  const form = new FormData();
+  form.set("file", new File(parts, session.filename, { type: session.mimeType }));
+  form.set("channel", session.channel); form.set("conversationId", session.conversationId);
+  const result = await uploadCrmMedia(form);
+  await setSetting(crmSessionKey(session.uploadId), { ...session, result });
+  await cleanCrmParts(session);
+  return result;
+}
+async function cancelCrmUpload(body: any) {
+  const session = await readCrmSession(body.uploadId);
+  if (session.result) return;
+  await cleanCrmParts(session);
+  await setSetting(crmSessionKey(session.uploadId), { ...session, cancelled: true });
+}
+
 async function uploadCrmMedia(form: FormData) {
   const channel = String(form.get("channel") || "");
   const conversationId = String(form.get("conversationId") || "");
@@ -4227,16 +4336,7 @@ async function uploadCrmMedia(form: FormData) {
   // Keep the existing WhatsApp route for documents beyond the Storage plan limit.
   if (channel === "whatsapp" && file.size > 50 * 1024 * 1024) return uploadWhatsAppMedia(form);
   if (channel !== "whatsapp") await socialTarget(channel);
-  const bucket = await crmStorageFetch(`/bucket/${CRM_MEDIA_BUCKET}`);
-  if (bucket.status === 404 || bucket.status === 400) {
-    const created = await crmStorageFetch("/bucket", { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: CRM_MEDIA_BUCKET, name: CRM_MEDIA_BUCKET, public: false, file_size_limit: 52428800 }) });
-    if (!created.ok && created.status !== 409) {
-      const detail = await created.json().catch(() => ({}));
-      console.error("crm_media_bucket", created.status, detail.message || detail.error || "");
-      throw new HttpError(502, "No se pudo preparar el almacenamiento privado");
-    }
-  } else if (!bucket.ok) throw new HttpError(502, "No se pudo comprobar el almacenamiento privado");
+  await ensureCrmMediaBucket();
   const filename = (file.name || `archivo.${extensionForMedia(file.type, type)}`).replace(/[^a-zA-Z0-9_.-]/g, "_").slice(-120) || "archivo";
   const storagePath = `uploads/${crypto.randomUUID()}/${filename}`;
   const response = await crmStorageFetch(`/object/${CRM_MEDIA_BUCKET}/${storagePath}`, {

@@ -2130,3 +2130,9 @@ body[data-view="crm"] .topbar { display: none; }
 #crmView .conversation-avatar > svg { width: 29px; height: 29px; color: #aab5bb; fill: #aab5bb; stroke: #e9edef; stroke-width: 1.2; }
 #crmView .thread-contact-button .conversation-avatar > svg { width: 25px; height: 25px; }
 #crmView .contact-profile .conversation-avatar > svg { width: 58px; height: 58px; }
+
+#crmView .reply-file-details { min-width: 0; display: grid; gap: 5px; }
+#crmView .video-preparation-status { font-size: 12px; color: #008069; line-height: 1.4; }
+#crmView .video-preparation-status.is-error { color: #b45309; }
+#crmView .prepared-video-download { width: fit-content; font-size: 12px; color: #008069; text-decoration: underline; }
+#crmView .is-preparing-video #sendApiButton::after { width: 18px; height: 18px; border: 2px solid #ffffff70; border-top-color: white; border-radius: 50%; background: transparent; mask: none; animation: crm-spin .8s linear infinite; }

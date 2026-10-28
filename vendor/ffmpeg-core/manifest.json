@@ -1,0 +1,38 @@
+{
+  "size": 32232419,
+  "sha256": "9f57947a5bd530d8f00c5b3f2cb2a3492faa7e5d823315342d6a8656d0a6b7b7",
+  "parts": [
+    {
+      "name": "0.wasm-part",
+      "size": 4194304
+    },
+    {
+      "name": "1.wasm-part",
+      "size": 4194304
+    },
+    {
+      "name": "2.wasm-part",
+      "size": 4194304
+    },
+    {
+      "name": "3.wasm-part",
+      "size": 4194304
+    },
+    {
+      "name": "4.wasm-part",
+      "size": 4194304
+    },
+    {
+      "name": "5.wasm-part",
+      "size": 4194304
+    },
+    {
+      "name": "6.wasm-part",
+      "size": 4194304
+    },
+    {
+      "name": "7.wasm-part",
+      "size": 2872291
+    }
+  ]
+}

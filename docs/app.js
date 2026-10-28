@@ -58,6 +58,7 @@ let remoteCoexistenceSetup = null;
 let crmSearchTimer = null;
 let crmContactInfoOpen = false;
 let crmMobileThreadOpen = false;
+let replyVideoJob = null;
 let crmSearchRequestVersion = 0;
 const conversationMessageState = new Map();
 const mediaObjectUrlCache = new Map();
@@ -224,7 +225,7 @@ async function adsControlApi(path, options = {}) {
   return payload;
 }
 
-async function apiForm(path, formData) {
+async function apiForm(path, formData, options = {}) {
   const headers = {};
   if (panelCode) {
     headers.Authorization = `Basic ${btoa(`panel:${panelCode}`)}`;
@@ -232,6 +233,7 @@ async function apiForm(path, formData) {
 
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
+    signal: options.signal,
     headers,
     body: formData,
   });
@@ -246,7 +248,7 @@ async function apiForm(path, formData) {
     showAuthGate();
     throw new Error("Ingresa el código del panel");
   }
-  if (!response.ok) throw new Error(payload.error || "No se pudo conectar");
+  if (!response.ok) { const error = new Error(payload.error || "No se pudo conectar"); error.status = response.status; throw error; }
   hideAuthGate();
   return payload;
 }
@@ -1584,13 +1586,52 @@ function updateCrmPanels() {
   document.querySelectorAll("[data-toggle-contact-info]").forEach(button => button.setAttribute("aria-expanded", String(crmContactInfoOpen)));
 }
 
+function resetReplyVideoJob() {
+  if (!replyVideoJob) return;
+  replyVideoJob.controller.abort();
+  if (replyVideoJob.url) URL.revokeObjectURL(replyVideoJob.url);
+  replyVideoJob = null;
+  document.getElementById("replyForm").classList.remove("is-preparing-video");
+}
+
 function renderReplyFilePreview() {
   const form = document.getElementById("replyForm");
   const file = form.elements.mediaFile.files?.[0];
   const preview = document.getElementById("replyFilePreview");
+  if (replyVideoJob && replyVideoJob.file !== file) resetReplyVideoJob();
+  const needsVideo = file && getActiveConversation()?.channel === "whatsapp" && getMediaFileType(file) === "video" && file.size > MEDIA_UPLOAD_LIMITS.video;
+  if (needsVideo && !replyVideoJob && file.size <= 100 * 1024 * 1024) {
+    const job = { file, controller: new AbortController(), status: "Preparando video…", prepared: null, error: "", url: "" };
+    replyVideoJob = job;
+    form.classList.add("is-preparing-video");
+    import("./video-tools.js?v=20261028-video-1").then(module => module.prepareWhatsAppVideo(file, {
+      signal: job.controller.signal,
+      onProgress: text => {
+        if (replyVideoJob !== job) return;
+        job.status = text;
+        const status = preview.querySelector(".video-preparation-status");
+        if (status) status.textContent = text;
+      },
+    })).then(prepared => {
+      if (replyVideoJob !== job) return;
+      job.prepared = prepared;
+      job.url = URL.createObjectURL(prepared);
+      job.status = `Video listo: ${formatBytes(file.size)} → ${formatBytes(prepared.size)}. El original se conserva.`;
+      form.classList.remove("is-preparing-video");
+      renderReplyFilePreview();
+    }).catch(error => {
+      if (replyVideoJob !== job || job.controller.signal.aborted) return;
+      job.error = error.message || "No se pudo preparar el video.";
+      job.status = job.error;
+      form.classList.remove("is-preparing-video");
+      renderReplyFilePreview();
+    });
+  }
   preview.hidden = !file;
-  preview.innerHTML = file ? `<span>${escapeHtml(file.name)} <small>${formatBytes(file.size)}</small></span><button class="chat-icon-button" type="button" data-remove-reply-file aria-label="Quitar archivo">${crmIcon("close")}</button>` : "";
+  const job = replyVideoJob?.file === file ? replyVideoJob : null;
+  preview.innerHTML = file ? `<div class="reply-file-details"><span>${escapeHtml(file.name)} <small>${formatBytes(file.size)}</small></span>${job ? `<span class="video-preparation-status ${job.error ? "is-error" : ""}" role="status">${escapeHtml(job.status)}</span>${job.prepared ? `<a class="prepared-video-download" href="${job.url}" download="${escapeHtml(job.prepared.name)}">Guardar copia preparada</a>` : ""}${job.error ? '<button class="secondary-button compact" type="button" data-retry-reply-video>Reintentar preparación</button>' : ""}` : ""}</div><button class="chat-icon-button" type="button" data-remove-reply-file aria-label="Quitar archivo">${crmIcon("close")}</button>` : "";
   form.elements.text.style.height = "auto";
+  updateReplyActions(getActiveConversation());
 }
 
 function highlightThreadSearch(scrollToMatch = true) {
@@ -1609,7 +1650,7 @@ function highlightThreadSearch(scrollToMatch = true) {
 }
 
 function getConversationDisplayName(conversation) {
-  return conversation?.customName || conversation?.name || conversation?.phone || conversation?.contactId || "";
+  return conversation?.customName || conversation?.whatsappContactName || conversation?.name || conversation?.phone || conversation?.contactId || "";
 }
 
 function getConversationAvatarUrl(conversation) {
@@ -1971,7 +2012,7 @@ function updateReplyActions(conversation) {
   if (mediaStatus) mediaStatus.textContent = !conversation ? "Selecciona una conversación para enviar fotos o videos." : conversation?.channel === "instagram"
     ? "Instagram: fotos hasta 8 MB; videos y audio hasta 25 MB."
     : conversation?.channel === "messenger" ? "Messenger: fotos hasta 8 MB; videos y archivos hasta 25 MB."
-    : "WhatsApp: fotos hasta 5 MB; videos y audio hasta 16 MB; documentos hasta 100 MB.";
+    : "WhatsApp: los videos grandes (hasta 100 MB) se preparan automáticamente. Fotos hasta 5 MB; audio hasta 16 MB; documentos hasta 100 MB.";
   const canSendWhatsAppApi = Boolean(remoteConfig.whatsappSendApiConfigured);
   openWhatsAppButton.disabled = !isWhatsApp;
   openWhatsAppButton.textContent = isWhatsApp ? "Abrir WhatsApp" : "Solo WhatsApp";
@@ -1984,7 +2025,8 @@ function updateReplyActions(conversation) {
     return;
   }
 
-  sendApiButton.disabled = !conversation || document.getElementById("replyForm").classList.contains("is-sending");
+  const preparingVideo = conversation?.channel === "whatsapp" && replyVideoJob && !replyVideoJob.prepared;
+  sendApiButton.disabled = !conversation || Boolean(preparingVideo) || document.getElementById("replyForm").classList.contains("is-sending");
   sendApiButton.textContent = "Enviar mensaje";
   sendApiButton.setAttribute("aria-label", "Enviar mensaje");
   sendApiButton.title = "";
@@ -3073,6 +3115,7 @@ document.addEventListener("click", event => {
     document.querySelector('.composer-emojis').open = false;
     input.focus({ preventScroll: true }); input.dispatchEvent(new Event("input"));
   }
+  if (event.target.closest("[data-retry-reply-video]")) { resetReplyVideoJob(); renderReplyFilePreview(); }
   if (event.target.closest("[data-remove-reply-file]")) {
     document.querySelector('#replyForm input[name="mediaFile"]').value = ""; renderReplyFilePreview();
   }
@@ -3191,10 +3234,16 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
   const sendApiButton = document.getElementById("sendApiButton");
   const originalButtonText = sendApiButton?.textContent || "Enviar API Meta";
   const text = form.elements.text.value.trim();
-  const mediaFile = form.elements.mediaFile.files?.[0] || null;
+  const originalMediaFile = form.elements.mediaFile.files?.[0] || null;
+  const mediaFile = conversation?.channel === "whatsapp" && replyVideoJob?.file === originalMediaFile && replyVideoJob.prepared ? replyVideoJob.prepared : originalMediaFile;
   const selectedMediaType = form.elements.mediaType.value;
   const mediaType = mediaFile ? getMediaFileType(mediaFile, selectedMediaType) : normalizeMediaType(selectedMediaType);
   if (!conversation || (!text && !mediaFile)) return;
+  if (mediaFile && conversation.channel === "whatsapp" && mediaType === "video" && mediaFile.size > MEDIA_UPLOAD_LIMITS.video && mediaFile.size <= 100 * 1024 * 1024) {
+    renderReplyFilePreview();
+    toast("El video se está preparando. Podrás enviarlo cuando termine.");
+    return;
+  }
   const mediaError = validateMediaUpload(mediaFile, mediaType, conversation.channel);
   if (mediaError) {
     toast(mediaError);
@@ -3218,7 +3267,15 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
       uploadForm.append("mediaType", mediaType);
       uploadForm.append("channel", conversation.channel);
       uploadForm.append("conversationId", conversation.id);
-      uploadedMedia = await apiForm("/api/media/upload", uploadForm);
+      if (mediaFile.size > 2 * 1024 * 1024 && mediaFile.size <= 50 * 1024 * 1024) {
+        const { uploadInParts } = await import("./upload-tools.js?v=20261028-upload-1");
+        uploadedMedia = await uploadInParts(mediaFile, {
+          channel: conversation.channel, conversationId: conversation.id,
+          requestJson: (path, body) => api(path, { method: "POST", body: JSON.stringify(body) }),
+          requestForm: apiForm,
+          onProgress: status => { if (sendApiButton) sendApiButton.textContent = status; },
+        });
+      } else uploadedMedia = await apiForm("/api/media/upload", uploadForm);
       if (sendApiButton) sendApiButton.textContent = "Enviando...";
     }
     const payload = {
