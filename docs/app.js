@@ -59,6 +59,8 @@ let crmSearchTimer = null;
 let crmSearchRequestVersion = 0;
 const conversationMessageState = new Map();
 const mediaObjectUrlCache = new Map();
+const socialInboxCursors = new Map();
+let socialInboxSyncing = false;
 
 const money = new Intl.NumberFormat("es-MX", {
   style: "currency",
@@ -1725,6 +1727,7 @@ function scheduleConversationSearch() {
 }
 
 function renderCrm() {
+  renderSocialInboxStatus();
   const list = document.getElementById("conversationList");
   const thread = document.getElementById("messageThread");
   const header = document.getElementById("threadHeader");
@@ -1865,7 +1868,7 @@ function renderCrm() {
           (message) => `
             <div class="message-bubble ${message.direction === "outbound" ? "outbound" : "inbound"}">
               ${message.text ? `<p>${escapeHtml(message.text)}</p>` : ""}
-              ${renderMessageAttachments(message.attachments)}
+              ${renderMessageAttachments(message.attachments, message)}
               <span>${new Date(message.at || Date.now()).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" })}</span>
             </div>
           `,
@@ -1885,6 +1888,11 @@ function updateReplyActions(conversation) {
   if (!sendApiButton || !openWhatsAppButton) return;
 
   const isWhatsApp = conversation?.channel === "whatsapp";
+  const mediaStatus = document.getElementById("replyMediaStatus");
+  if (mediaStatus) mediaStatus.textContent = conversation?.channel === "instagram"
+    ? "Instagram: fotos hasta 8 MB; videos y audio hasta 25 MB."
+    : conversation?.channel === "messenger" ? "Messenger: fotos hasta 8 MB; videos y archivos hasta 25 MB."
+    : "WhatsApp: fotos hasta 5 MB; videos y audio hasta 16 MB; documentos hasta 100 MB.";
   const canSendWhatsAppApi = Boolean(remoteConfig.whatsappSendApiConfigured);
   openWhatsAppButton.disabled = !isWhatsApp;
   openWhatsAppButton.textContent = isWhatsApp ? "Abrir WhatsApp" : "Solo WhatsApp";
@@ -1912,14 +1920,17 @@ function focusReplyComposer() {
   });
 }
 
-function renderMessageAttachments(attachments = []) {
+function renderMessageAttachments(attachments = [], message = {}) {
   if (!attachments?.length) return "";
   return `
     <div class="attachment-list">
       ${attachments
-        .map((attachment) => {
+        .map((attachment, index) => {
           const label = getAttachmentLabel(attachment);
           const type = getAttachmentType(attachment);
+          if (message.id && (attachment.storagePath || ["messenger", "instagram"].includes(message.channel))) {
+            return renderMediaPreview(authenticatedMessageMediaUrl(message.id, index, label, type), type, label);
+          }
           if (attachment.url) {
             return renderMediaPreview(attachment.url, type, label);
           }
@@ -1994,11 +2005,12 @@ function getMediaFileType(file, fallbackType = "") {
   );
 }
 
-function validateMediaUpload(file, type) {
+function validateMediaUpload(file, type, channel = "whatsapp") {
   if (!file) return "";
-  const limit = MEDIA_UPLOAD_LIMITS[type] || MEDIA_UPLOAD_LIMITS.document;
+  if (channel === "instagram" && type === "document") return "Instagram permite fotos, videos y audio en este formulario.";
+  const limit = channel === "whatsapp" ? MEDIA_UPLOAD_LIMITS[type] || MEDIA_UPLOAD_LIMITS.document : (type === "image" ? 8 : 25) * 1024 * 1024;
   if (file.size <= limit) return "";
-  return `El archivo pesa ${formatBytes(file.size)}. Para WhatsApp el limite de ${getMediaTypeLabel(type)} es ${formatBytes(limit)}.`;
+  return `El archivo pesa ${formatBytes(file.size)}. Para ${getChannelLabel(channel)} el límite de ${getMediaTypeLabel(type)} es ${formatBytes(limit)}.`;
 }
 
 function getMediaTypeLabel(type) {
@@ -2036,20 +2048,67 @@ function authenticatedMediaUrl(mediaId, label = "archivo", type = "document") {
   return `${API_BASE}/api/media/whatsapp/${encodeURIComponent(mediaId)}/${encodeURIComponent(filename)}${query}`;
 }
 
+function authenticatedMessageMediaUrl(messageId, index, label, type) {
+  const token = panelCode ? btoa(`panel:${panelCode}`) : "";
+  return `${API_BASE}/api/media/message/${encodeURIComponent(messageId)}/${index}/${encodeURIComponent(mediaUrlFilename(label, type))}?media_token=${encodeURIComponent(token)}`;
+}
+
+function renderSocialInboxStatus() {
+  const status = document.getElementById("socialInboxStatus");
+  if (!status || socialInboxSyncing || status.dataset.result) return;
+  const pending = [];
+  if (!remoteConfig.messengerPageConfigured) pending.push("Messenger");
+  if (!remoteConfig.instagramAccountConfigured) pending.push("Instagram");
+  status.textContent = pending.length
+    ? `${pending.join(" e ")}: conexión pendiente con Meta. Usa Cargar para comprobar el acceso e importar conversaciones.`
+    : "Carga conversaciones de Messenger e Instagram. Los mensajes nuevos llegan por la conexión de Meta.";
+}
+
+async function syncSocialInboxFromPanel() {
+  if (socialInboxSyncing) return;
+  const selected = document.getElementById("crmChannelFilter").value;
+  const channels = ["messenger", "instagram"].includes(selected) ? [selected] : ["messenger", "instagram"];
+  const button = document.getElementById("syncSocialInbox");
+  const status = document.getElementById("socialInboxStatus");
+  socialInboxSyncing = true;
+  button.disabled = true;
+  button.textContent = "Cargando conversaciones…";
+  status.textContent = "Consultando mensajes en Meta…";
+  const results = [];
+  try {
+    for (const channel of channels) {
+      try {
+        const result = await api("/api/meta/inbox/sync", { method: "POST", body: JSON.stringify({ channel, after: socialInboxCursors.get(channel) || "" }) });
+        socialInboxCursors.set(channel, result.nextAfter || "");
+        applyRemoteState(result);
+        results.push(`${getChannelLabel(channel)}: ${result.conversations.length} conversaciones; ${result.imported} mensajes nuevos${result.nextAfter ? ". Hay más conversaciones por cargar" : ""}${result.messagesHaveMore ? ". Algunas conversaciones tienen más historial en Meta" : ""}.`);
+      } catch (error) { results.push(`${getChannelLabel(channel)}: ${error.message}`); }
+    }
+    status.dataset.result = "true";
+    status.textContent = results.join(" ");
+    renderCrm();
+  } finally {
+    socialInboxSyncing = false;
+    button.disabled = false;
+    button.textContent = [...socialInboxCursors.values()].some(Boolean) ? "Cargar más conversaciones" : "Cargar Messenger e Instagram";
+  }
+}
+
 function renderMediaPreview(url, type, label) {
+  if (!/^https?:\/\//i.test(url) && !url.startsWith("blob:") && !url.startsWith("/")) return `<span>Archivo sin dirección válida</span>`;
   const safeUrl = escapeHtml(url);
   const safeLabel = escapeHtml(label);
   if (type === "image") {
     return `
       <a class="message-media-link" href="${safeUrl}" target="_blank" rel="noreferrer noopener" aria-label="Abrir ${safeLabel}">
-        <img class="message-media" src="${safeUrl}" alt="${safeLabel}" loading="lazy" />
+        <img class="message-media" src="${safeUrl}" alt="${safeLabel}" loading="lazy" referrerpolicy="no-referrer" data-media-preview />
       </a>
     `;
   }
   if (type === "video") {
     return `
       <div class="message-video-card">
-        <video class="message-media" src="${safeUrl}" controls playsinline preload="metadata"></video>
+        <video class="message-media" src="${safeUrl}" controls playsinline preload="metadata" data-media-preview></video>
         <a class="message-media-open" href="${safeUrl}" target="_blank" rel="noreferrer noopener" download="${safeLabel}">Abrir o descargar video</a>
       </div>
     `;
@@ -2908,9 +2967,26 @@ document.getElementById("exportSpendCsv").addEventListener("click", () => {
 });
 
 document.getElementById("importCsv").addEventListener("click", importCsv);
-document.getElementById("crmChannelFilter").addEventListener("change", () => {
+document.getElementById("syncSocialInbox")?.addEventListener("click", syncSocialInboxFromPanel);
+document.getElementById("messageThread").addEventListener("error", (event) => {
+  const element = event.target;
+  if (!element.matches?.("[data-media-preview]")) return;
+  const container = element.closest(".message-video-card, .message-media-link");
+  if (!container || container.querySelector(".media-error")) return;
+  const note = document.createElement("span");
+  note.className = "media-error";
+  note.textContent = "No se pudo cargar este archivo. Abre el enlace para ver el detalle del acceso.";
+  container.append(note);
+}, true);
+document.getElementById("crmChannelFilter").addEventListener("change", async () => {
   activeConversationId = "";
   renderCrm();
+  const channel = document.getElementById("crmChannelFilter").value;
+  try {
+    const result = await api(`/api/conversations/search?channel=${encodeURIComponent(channel)}&limit=100`);
+    applyRemoteState(result);
+    renderCrm();
+  } catch (error) { toast(error.message); }
 });
 document.getElementById("crmUnreadFilter").addEventListener("change", () => {
   activeConversationId = "";
@@ -2971,7 +3047,7 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
   const selectedMediaType = form.elements.mediaType.value;
   const mediaType = mediaFile ? getMediaFileType(mediaFile, selectedMediaType) : normalizeMediaType(selectedMediaType);
   if (!conversation || (!text && !mediaFile)) return;
-  const mediaError = validateMediaUpload(mediaFile, mediaType);
+  const mediaError = validateMediaUpload(mediaFile, mediaType, conversation.channel);
   if (mediaError) {
     toast(mediaError);
     return;
@@ -2988,20 +3064,16 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
     }
     let uploadedMedia = null;
     if (mediaFile) {
-      if (conversation.channel !== "whatsapp") {
-        toast("Los archivos desde dispositivo por ahora solo estan listos para WhatsApp");
-        return;
-      }
       toast(`Subiendo ${mediaType === "document" ? "documento" : mediaType === "video" ? "video" : "archivo"}...`);
       const uploadForm = new FormData();
       uploadForm.append("file", mediaFile);
       uploadForm.append("mediaType", mediaType);
-      uploadedMedia = await apiForm("/api/media/whatsapp", uploadForm);
+      uploadForm.append("channel", conversation.channel);
+      uploadForm.append("conversationId", conversation.id);
+      uploadedMedia = await apiForm("/api/media/upload", uploadForm);
       if (sendApiButton) sendApiButton.textContent = "Enviando...";
     }
-    const remoteState = await api("/api/messages", {
-      method: "POST",
-      body: JSON.stringify({
+    const payload = {
         channel: conversation.channel,
         conversationId: conversation.id,
         to: conversation.channel === "whatsapp" ? conversation.phone : conversation.contactId,
@@ -3014,8 +3086,16 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
         mediaId: uploadedMedia?.mediaId || "",
         mediaFilename: uploadedMedia?.filename || mediaFile?.name || "",
         mediaMimeType: uploadedMedia?.mimeType || mediaFile?.type || "",
-      }),
-    });
+        mediaStoragePath: uploadedMedia?.storagePath || "",
+      };
+    if (conversation.channel !== "whatsapp" && text && uploadedMedia) {
+      const textState = await api("/api/messages", { method: "POST", body: JSON.stringify({ ...payload, mediaType: "", mediaId: "", mediaFilename: "", mediaMimeType: "", mediaStoragePath: "" }) });
+      applyRemoteState(textState);
+      form.elements.text.value = "";
+      payload.text = "";
+      renderCrm();
+    }
+    const remoteState = await api("/api/messages", { method: "POST", body: JSON.stringify(payload) });
     form.reset();
     applyRemoteState(remoteState);
     render();
@@ -3024,7 +3104,7 @@ document.getElementById("replyForm").addEventListener("submit", async (event) =>
     toast(mediaFile ? "Mensaje con archivo enviado" : "Mensaje enviado");
   } catch (error) {
     console.error(error);
-    if (isWhatsAppPermissionError(error)) {
+    if (conversation.channel === "whatsapp" && isWhatsAppPermissionError(error)) {
       remoteConfig.whatsappSendApiConfigured = false;
       updateReplyActions(conversation);
       openWhatsAppDraft();

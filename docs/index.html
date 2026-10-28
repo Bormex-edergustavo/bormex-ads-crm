@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="bormex-api-base" content="https://tnajelbyzkrifukfgnxv.functions.supabase.co/bormex-crm" />
     <title>Bormex Ads CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20260822-crm-performance" />
+    <link rel="stylesheet" href="styles.css?v=20261028-inbox-media" />
   </head>
   <body>
     <div class="app-shell" id="appShell">
@@ -180,6 +180,10 @@
                 </div>
               </div>
               <input id="crmSearch" class="crm-search" placeholder="Buscar nombre, número o anuncio" />
+              <div class="inbox-connection">
+                <p id="socialInboxStatus" role="status">Elige un canal para ver sus conversaciones.</p>
+                <button class="secondary-button compact" id="syncSocialInbox" type="button">Cargar Messenger e Instagram</button>
+              </div>
               <div class="conversation-list" id="conversationList"></div>
             </div>
 
@@ -202,6 +206,7 @@
                   </select>
                   <input name="mediaFile" type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.mp3,.ogg,.oga,.opus,.wav,.m4a,.aac,.amr,.mp4,.mov,.webm,.m4v,.3gp" />
                 </div>
+                <p id="replyMediaStatus" class="reply-media-status" role="status"></p>
                 <div class="reply-actions">
                   <button class="primary-button" id="sendApiButton" type="submit">Enviar API Meta</button>
                   <button class="secondary-button" id="openWhatsAppDraft" type="button">Abrir WhatsApp</button>
@@ -447,7 +452,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=20260822-crm-performance"></script>
+    <script src="app.js?v=20261028-inbox-media"></script>
     <script>
       window.lucide?.createIcons();
     </script>

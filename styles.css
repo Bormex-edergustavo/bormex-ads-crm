@@ -1898,3 +1898,7 @@ textarea:focus {
     max-width: 92%;
   }
 }
+.inbox-connection { padding: 0 16px 12px; font-size: 12px; color: #475569; }
+.inbox-connection p { margin: 0 0 8px; overflow-wrap: anywhere; }
+.reply-media-status { margin: 0; font-size: 12px; color: #64748b; }
+.media-error { display: block; padding: 8px; font-size: 12px; color: #b45309; }

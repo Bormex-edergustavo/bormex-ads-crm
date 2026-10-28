@@ -15,6 +15,34 @@ Dashboard para registrar ventas de WhatsApp y atribuirlas a anuncios por numero 
 
 ## Desarrollo local
 
+## Fotos, videos y bandejas de Meta (28-oct-2026)
+
+El formulario admite archivos del dispositivo en WhatsApp, Messenger e Instagram.
+Los originales enviados se conservan en el bucket privado `bormex-crm-media`,
+que se prepara en la primera subida. El acceso desde la conversación exige el
+código del CRM; Meta recibe un enlace temporal de una hora para enviar adjuntos.
+Las descargas admiten Range para reproducir videos. Los enlaces de archivos
+recibidos por Messenger/Instagram se actualizan con Meta si han vencido.
+
+El botón **Cargar Messenger e Instagram** importa una página de 15 conversaciones,
+hasta 100 mensajes por conversación. Ofrece continuar cuando hay más páginas y
+avisa cuando una conversación tiene más historial en Meta. No representa una
+recuperación completa de todos los mensajes históricos. El filtro de canal
+consulta el servidor para incluir conversaciones fuera de las 300 más recientes.
+
+Para habilitar canales se necesitan los casos de uso correspondientes en Meta,
+el webhook `/webhooks/meta`, su suscripción y los permisos aprobados de la página
+y cuenta. Configure `MESSENGER_PAGE_ID`, `MESSENGER_PAGE_ACCESS_TOKEN`,
+`INSTAGRAM_ACCOUNT_ID` y `INSTAGRAM_ACCESS_TOKEN` en el servidor. Para Instagram
+con Facebook Login, configure también la página vinculada. Solo para tokens de
+Instagram Login configure `INSTAGRAM_LOGIN_MODE=instagram`. No se selecciona una
+página ajena automáticamente. El token de anuncios no acredita acceso a mensajes.
+
+Validación: `npm test`. Las pruebas simulan Meta y Storage; no envían mensajes
+a clientes. La función del servidor es la implementación productiva de Supabase.
+
+### Servidor local
+
 Para abrirlo en la Mac:
 
 ```bash

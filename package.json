@@ -6,6 +6,7 @@
   "scripts": {
     "build:edge": "node scripts/build-edge.mjs",
     "build:static": "node scripts/build-static.mjs",
-    "check": "node --check server.mjs && node --check app.js && node scripts/build-edge.mjs"
+    "check": "node --check server.mjs && node --check app.js && node scripts/build-edge.mjs",
+    "test": "node tests/inbox-media.test.mjs"
   }
 }
