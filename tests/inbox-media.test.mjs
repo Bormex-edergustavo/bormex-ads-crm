@@ -227,6 +227,12 @@ await test('An archived upload made with the old app is sent by its private sign
   const h=harness();const media=await(await h.upload('whatsapp','video/mp4','video.mp4')).json();h.env.WHATSAPP_SEND_TRANSPORT='dualhook';h.env.DUALHOOK_RUNTIME_API_KEY='dh_live_runtime_test_123456789';const before=h.calls.length;
   const r=await h.request('/api/messages','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',to:'521234567890',mediaType:'video',mediaId:media.mediaId,mediaStoragePath:media.storagePath});assert.equal(r.status,200,await r.clone().text());const call=h.calls.slice(before).find(c=>c.url.includes('api.dualhook.com'));const body=JSON.parse(call.options.body);assert(body.video.link.startsWith('https://storage.test/'));assert(!body.video.id);assert(!h.calls.slice(before).some(c=>c.url.includes('graph.facebook.com')));
 });
+await test('A saved video survives a change of native sending app through its private file link',async()=>{
+  const h=harness({WHATSAPP_SEND_CREDENTIALS_SOURCE:'paired_media',WHATSAPP_MEDIA_ACCESS_TOKEN:'old-token',WHATSAPP_MEDIA_APP_SECRET:'old-secret'});
+  const media=await(await h.upload('whatsapp','video/mp4','video.mp4')).json();h.env.WHATSAPP_SEND_CREDENTIALS_SOURCE='send';h.env.WHATSAPP_SEND_ACCESS_TOKEN='new-token';h.env.WHATSAPP_SEND_APP_SECRET='new-secret';
+  const r=await h.request('/api/messages','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',to:'521234567890',mediaType:'video',mediaId:media.mediaId,mediaStoragePath:media.storagePath});assert.equal(r.status,200,await r.clone().text());
+  const call=h.calls.findLast(c=>c.url.includes('graph.facebook.com')&&c.url.includes('/messages'));const body=JSON.parse(call.options.body);assert(body.video.link.startsWith('https://storage.test/'));assert(!body.video.id);assert.equal(new Headers(call.options.headers).get('authorization'),'Bearer new-token');
+});
 await test('An inaccessible sending phone is reported as a credential problem without blaming the recipient',()=>{
   const h=harness();const error=h.c.formatWhatsAppSendError({error:{code:100,error_subcode:33,message:'Unsupported post request'}},{to:'521234567890'});
   assert(error.includes('emisor'));assert(error.includes('credencial'));assert(!error.includes('521234567890'));assert(!error.includes('numero personal'));

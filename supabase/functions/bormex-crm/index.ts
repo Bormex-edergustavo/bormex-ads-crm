@@ -1325,7 +1325,10 @@ async function sendCrmMessage(body: any) {
   if (media.storagePath) {
     const stored = await readCrmUpload(media.storagePath);
     if (stored.channel !== channel || stored.conversationId !== conversationId) throw new HttpError(400, "El archivo pertenece a otra conversación");
-    const crossAppUpload = channel === "whatsapp" && dualhookRuntimeEnabled() && stored.whatsappTransport !== "dualhook";
+    const crossAppUpload = channel === "whatsapp" && (
+      stored.whatsappTransport !== (dualhookRuntimeEnabled() ? "dualhook" : "meta") ||
+      stored.whatsappCredentialSource !== (Deno.env.get("WHATSAPP_SEND_CREDENTIALS_SOURCE") || "send")
+    );
     if (crossAppUpload) media.id = "";
     Object.assign(media, stored, { url: channel === "whatsapp" && media.id ? "" : await signedCrmMediaUrl(media.storagePath) });
   }
@@ -4505,7 +4508,7 @@ async function uploadCrmMedia(form: FormData) {
     method: "POST", headers: { "content-type": file.type || "application/octet-stream", "x-upsert": "false" }, body: file,
   });
   if (!response.ok) throw new HttpError(502, "No se pudo guardar el archivo. Intenta de nuevo.");
-  const metadata = { channel, conversationId, type, filename: file.name || filename, mimeType: file.type, storagePath, size: file.size, at: new Date().toISOString(), ...(channel === "whatsapp" ? { whatsappTransport: dualhookRuntimeEnabled() ? "dualhook" : "meta" } : {}) };
+  const metadata = { channel, conversationId, type, filename: file.name || filename, mimeType: file.type, storagePath, size: file.size, at: new Date().toISOString(), ...(channel === "whatsapp" ? { whatsappTransport: dualhookRuntimeEnabled() ? "dualhook" : "meta", whatsappCredentialSource: Deno.env.get("WHATSAPP_SEND_CREDENTIALS_SOURCE") || "send" } : {}) };
   await setSetting(`crmUpload:${storagePath}`, metadata);
   if (channel === "whatsapp") {
     const upload = await uploadWhatsAppMedia(form);
