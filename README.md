@@ -34,6 +34,8 @@ acepta confirmaciones anteriores a la respuesta de envío. Sólo `service_role`
 puede ejecutarlo. Un rechazo posterior aparece en la burbuja del mensaje.
 `tests/whatsapp-delivery.sql` comprueba las secuencias en Postgres dentro de una
 transacción que termina en rollback; no envía mensajes ni deja datos de prueba.
+La actualización de la bandeja conserva las burbujas y reproductores existentes;
+las marcas de entrega se actualizan sin reiniciar el video o audio del chat.
 
 ## Videos grandes y nombres de WhatsApp (28-oct-2026)
 

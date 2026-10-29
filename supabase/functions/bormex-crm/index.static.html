@@ -4630,28 +4630,30 @@ function renderCrm() {
   }
 
   const historyControl = messageLoad.error
-    ? `<div class="thread-history-action"><span>${escapeHtml(messageLoad.error)}</span><button class="secondary-button compact" data-retry-message-history type="button">Reintentar</button></div>`
+    ? `<div class="thread-history-action" data-thread-key="history"><span>${escapeHtml(messageLoad.error)}</span><button class="secondary-button compact" data-retry-message-history type="button">Reintentar</button></div>`
     : messageLoad.hasMore
-      ? `<div class="thread-history-action"><button class="secondary-button compact" data-load-older-messages type="button" ${messageLoad.loading ? "disabled" : ""}>${messageLoad.loading ? "Cargando..." : "Cargar mensajes anteriores"}</button></div>`
+      ? `<div class="thread-history-action" data-thread-key="history"><button class="secondary-button compact" data-load-older-messages type="button" ${messageLoad.loading ? "disabled" : ""}>${messageLoad.loading ? "Cargando..." : "Cargar mensajes anteriores"}</button></div>`
       : "";
   let previousDay = "";
-  thread.innerHTML = historyControl + (messages.length
+  const threadHtml = historyControl + (messages.length
     ? messages.map(message => {
       const date = new Date(message.at || Date.now());
       const day = date.toLocaleDateString("es-MX", { year: "numeric", month: "long", day: "numeric" });
-      const divider = day !== previousDay ? `<div class="message-date-divider"><span>${escapeHtml(day)}</span></div>` : "";
+      const divider = day !== previousDay ? `<div class="message-date-divider" data-thread-key="day:${escapeHtml(day)}"><span>${escapeHtml(day)}</span></div>` : "";
       previousDay = day;
       const outbound = message.direction === "outbound";
       const receipt = outbound && ["sent", "delivered", "read"].includes(message.status)
         ? `<span class="message-receipt ${message.status === "read" ? "is-read" : ""}" aria-label="${{sent:"Enviado",delivered:"Entregado",read:"Leído"}[message.status]}">${crmIcon(message.status === "sent" ? "check" : "checks")}</span>` : "";
-      return `${divider}<div class="message-bubble ${outbound ? "outbound" : "inbound"}">
+      const contentKey = escapeHtml(JSON.stringify([message.text, message.attachments, message.direction, message.deliveryError]));
+      return `${divider}<div class="message-bubble ${outbound ? "outbound" : "inbound"}" data-thread-key="msg:${escapeHtml(message.id)}" data-content-key="${contentKey}">
         ${message.text && !/^\[(image|video|audio|document|sticker)\]$/i.test(message.text.trim()) ? `<p>${escapeHtml(message.text)}</p>` : ""}
         ${renderMessageAttachments(message.attachments, message)}
         ${outbound && message.status === "failed" ? `<p class="message-delivery-error" role="status">${escapeHtml(message.deliveryError?.message || "Meta no entregó este mensaje. El contenido se conserva.")}</p>` : ""}
         <div class="message-meta"><time title="${escapeHtml(date.toLocaleString("es-MX"))}">${date.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}</time>${receipt}</div>
       </div>`;
     }).join("")
-    : `<div class="empty">Todavía no hay mensajes guardados.</div>`);
+    : `<div class="empty" data-thread-key="empty">Todavía no hay mensajes guardados.</div>`);
+  updateMessageThread(thread, threadHtml, activeConversationId);
   thread.dataset.conversationId = activeConversationId;
   if (previousThreadConversationId !== activeConversationId || threadWasNearBottom) {
     thread.scrollTop = thread.scrollHeight;
@@ -4660,6 +4662,32 @@ function renderCrm() {
   hydrateMediaAttachments(thread);
   if (thread.dataset.followBottom === "true") requestAnimationFrame(() => { thread.scrollTop = thread.scrollHeight; });
   highlightThreadSearch(false);
+}
+
+function updateMessageThread(thread, html, conversationId) {
+  if (thread.dataset.conversationId !== conversationId) {
+    thread.innerHTML = html;
+    return;
+  }
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const next = [...template.content.children];
+  const existing = new Map([...thread.children].map(node => [node.dataset.threadKey, node]));
+  next.forEach((candidate, index) => {
+    const previous = existing.get(candidate.dataset.threadKey);
+    let node = candidate;
+    if (previous && candidate.dataset.contentKey !== undefined && previous.dataset.contentKey === candidate.dataset.contentKey) {
+      // Keep the live video/audio element; receipts can change independently.
+      const meta = previous.querySelector(".message-meta");
+      const nextMeta = candidate.querySelector(".message-meta");
+      if (meta && nextMeta && meta.innerHTML !== nextMeta.innerHTML) meta.innerHTML = nextMeta.innerHTML;
+      node = previous;
+    } else if (previous && previous.outerHTML === candidate.outerHTML) {
+      node = previous;
+    }
+    if (thread.children[index] !== node) thread.insertBefore(node, thread.children[index] || null);
+  });
+  while (thread.children.length > next.length) thread.lastElementChild.remove();
 }
 
 function updateReplyActions(conversation) {
@@ -4912,7 +4940,7 @@ async function hydrateMediaAttachments(root) {
       const mediaId = frame.dataset.whatsappMediaId || "";
       const label = frame.dataset.mediaLabel || "archivo";
       const fallbackType = frame.dataset.mediaType || "document";
-      if (!mediaId) return;
+      if (!mediaId || frame.classList.contains("is-ready")) return;
       try {
         const cacheKey = `${mediaId}:${label}:${fallbackType}`;
         const cached = mediaObjectUrlCache.get(cacheKey) || {
