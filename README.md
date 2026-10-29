@@ -88,6 +88,13 @@ ese secreto para sus pruebas. La firma global del webhook sigue independiente.
 
 `GET /api/meta/credentials/status` permite al administrador comprobar vigencia,
 app emisora, permisos e identidad comercial sin devolver las credenciales.
+La comprobación de las credenciales existentes se hace con la identidad ya
+verificada de la app; nunca se elige otra credencial automáticamente por tener
+un permiso en su lista. Cada envío incluye `messaging_account_id` con el
+`WHATSAPP_BUSINESS_ACCOUNT_ID` configurado para resolver expresamente la cuenta
+de Bormex, según la [referencia de Meta](https://developers.facebook.com/documentation/business-messaging/whatsapp/account-model-evolution/messaging/).
+El rechazo `100/33` indica que la credencial no pudo acceder al objeto emisor;
+se presenta como un problema de acceso y conserva el borrador.
 
 Cuando el número ya está conectado mediante Dualhook, el servidor también admite
 su [Runtime API oficial](https://dualhook.com/docs/runtime-api-reference).

@@ -1447,7 +1447,7 @@ async function sendWhatsAppMessage(to: string, textBody: string, media: { type: 
       subcode: Number(payload.error?.error_subcode) || null,
       type: String(payload.error?.type || ""), traceId: String(payload.error?.fbtrace_id || ""),
     }));
-    const denied = [10, 200].includes(Number(payload.error?.code)) || /necessary permissions/i.test(String(payload.error?.message || ""));
+    const denied = [10, 200].includes(Number(payload.error?.code)) || (Number(payload.error?.code) === 100 && Number(payload.error?.error_subcode) === 33) || /necessary permissions/i.test(String(payload.error?.message || ""));
     throw new HttpError(denied ? 403 : 502, formatWhatsAppSendError(payload, { to, media }));
   }
   const messageId = payload.messages?.[0]?.id;
@@ -1479,10 +1479,14 @@ function buildWhatsAppMessageBody(to: string, textBody: string, media: { type: s
 
 async function postWhatsAppMessage(phoneNumberId: string, token: string, body: Record<string, unknown>) {
   const endpoint = await whatsappSendEndpoint(phoneNumberId, "messages", token);
+  // The phone may have several Messaging Accounts. Select our configured
+  // business explicitly instead of letting Meta infer one from the token.
+  const messagingAccountId = String(Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID") || "").trim();
+  if (messagingAccountId && !/^\d+$/.test(messagingAccountId)) throw new HttpError(503, "La cuenta de mensajes de WhatsApp no está configurada correctamente");
   return fetch(endpoint, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, ...(messagingAccountId ? { messaging_account_id: messagingAccountId } : {}) }),
     redirect: "error",
   });
 }
@@ -1697,6 +1701,7 @@ async function downloadWhatsAppMedia(mediaId: string, req: Request, filename = "
 
 function formatWhatsAppSendError(payload: any, context: { to?: string; media?: { type?: string; filename?: string; mimeType?: string } } = {}) {
   const message = String(payload?.error?.message || "");
+  if (Number(payload?.error?.code) === 100 && Number(payload?.error?.error_subcode) === 33) return "(#100/33) Meta no permite acceder al número de WhatsApp emisor con la credencial seleccionada. Hay que revisar su acceso a la cuenta de Bormex.";
   if (/appsecret_proof/i.test(message)) return "WhatsApp necesita completar su conexión segura para enviar mensajes y archivos. La recepción sigue disponible.";
   const code = payload?.error?.code ? `#${payload.error.code}` : "";
   const details = String(payload?.error?.error_data?.details || payload?.error?.error_user_msg || "");
@@ -1706,8 +1711,7 @@ function formatWhatsAppSendError(payload: any, context: { to?: string; media?: {
   if (code === "#100" || message.toLowerCase().includes("invalid parameter")) {
     const mediaType = context.media?.type ? ` ${context.media.type}` : "";
     const filename = context.media?.filename ? ` (${context.media.filename})` : "";
-    const suffix = context.to ? ` Destino: ${context.to}.` : "";
-    return `(#100) Meta rechazo los parametros del mensaje${mediaType}${filename}.${suffix} Si estas probando, usa el numero personal real del cliente, no el mismo numero emisor del WhatsApp Business.`;
+    return `(#100) Meta no aceptó los datos del mensaje${mediaType}${filename}. ${details}`.trim();
   }
   return [code ? `(${code})` : "", message, details].filter(Boolean).join(" ") || "Meta no acepto el mensaje de WhatsApp";
 }
@@ -4278,24 +4282,27 @@ async function metaMessagingCredentialStatus() {
         errorCode: payload.error?.code || null, error: String(payload.error?.message || "").replaceAll(token, "[token]").slice(0, 300) };
     } catch { result[label] = { configured: true, ok: false, error: "No se pudo verificar la credencial con Meta" }; }
   }
-  // Inspect the pre-existing explicit send token with this app's own credential.
-  // This verifies the issuing app before any secret can be paired for sending.
-  const explicitToken = Deno.env.get("WHATSAPP_SEND_ACCESS_TOKEN") || Deno.env.get("WHATSAPP_COEX_ACCESS_TOKEN") || "";
+  // Inspect existing credentials with the already verified app's own credential.
+  // This verifies the issuing app before any secret is paired for sending.
   const pairedSecret = Deno.env.get("WHATSAPP_MEDIA_APP_SECRET") || "";
   const pairedAppId = String((result.whatsapp_media as any)?.appId || "");
-  if (explicitToken && pairedSecret && pairedAppId) {
+  if (pairedSecret && pairedAppId) await Promise.all([
+    ["whatsapp_explicit_verified", Deno.env.get("WHATSAPP_SEND_ACCESS_TOKEN") || Deno.env.get("WHATSAPP_COEX_ACCESS_TOKEN") || ""],
+    ["ads_verified", metaAdsAccessToken()],
+  ].map(async ([label, token]) => {
+    if (!token) return;
     try {
       const url = new URL(`https://graph.facebook.com/${graphVersion()}/debug_token`);
-      url.searchParams.set("input_token", explicitToken);
+      url.searchParams.set("input_token", token);
       const response = await fetch(url, { headers: { authorization: `Bearer ${pairedAppId}|${pairedSecret}` }, signal: AbortSignal.timeout(15000) });
       const payload = await response.json(); const d = payload.data || {};
-      result.whatsapp_explicit_verified = { ok: response.ok, valid: d.is_valid === true,
+      result[label] = { ok: response.ok, valid: d.is_valid === true,
         sameApp: String(d.app_id || "") === pairedAppId, appId: String(d.app_id || ""),
         application: String(d.application || ""), type: String(d.type || ""), userId: String(d.user_id || ""),
         scopes: d.scopes || [], granularScopes: d.granular_scopes || [], expiresAt: d.expires_at || null,
-        error: String(payload.error?.message || "").replaceAll(explicitToken, "[token]").replaceAll(pairedSecret, "[secret]").slice(0, 240) };
-    } catch { result.whatsapp_explicit_verified = { ok: false, error: "No se pudo comprobar la credencial explícita" }; }
-  }
+        error: String(payload.error?.message || "").replaceAll(token, "[token]").replaceAll(pairedSecret, "[secret]").slice(0, 240) };
+    } catch { result[label] = { ok: false, error: "No se pudo comprobar la credencial existente" }; }
+  }));
   // Read-only diagnostics with the exact token/secret pair selected for sending.
   if ((result.whatsapp_send as any)?.valid) {
     const token = whatsappSendAccessToken();

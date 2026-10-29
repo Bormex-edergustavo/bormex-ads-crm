@@ -227,6 +227,19 @@ await test('An archived upload made with the old app is sent by its private sign
   const h=harness();const media=await(await h.upload('whatsapp','video/mp4','video.mp4')).json();h.env.WHATSAPP_SEND_TRANSPORT='dualhook';h.env.DUALHOOK_RUNTIME_API_KEY='dh_live_runtime_test_123456789';const before=h.calls.length;
   const r=await h.request('/api/messages','POST',{channel:'whatsapp',conversationId:'whatsapp_contact',to:'521234567890',mediaType:'video',mediaId:media.mediaId,mediaStoragePath:media.storagePath});assert.equal(r.status,200,await r.clone().text());const call=h.calls.slice(before).find(c=>c.url.includes('api.dualhook.com'));const body=JSON.parse(call.options.body);assert(body.video.link.startsWith('https://storage.test/'));assert(!body.video.id);assert(!h.calls.slice(before).some(c=>c.url.includes('graph.facebook.com')));
 });
+await test('An inaccessible sending phone is reported as a credential problem without blaming the recipient',()=>{
+  const h=harness();const error=h.c.formatWhatsAppSendError({error:{code:100,error_subcode:33,message:'Unsupported post request'}},{to:'521234567890'});
+  assert(error.includes('emisor'));assert(error.includes('credencial'));assert(!error.includes('521234567890'));assert(!error.includes('numero personal'));
+});
+await test('Text and media explicitly use the configured Messaging Account without caller overrides',async()=>{
+  const h=harness({WHATSAPP_BUSINESS_ACCOUNT_ID:'363434497629717'});
+  for(const media of [{type:'',url:''},{type:'video',url:'',id:'123456789'}]){
+    await h.c.sendWhatsAppMessage('521234567890','Prueba',media);
+    const call=h.calls.at(-1);assert.equal(JSON.parse(call.options.body).messaging_account_id,'363434497629717');
+  }
+  await h.c.postWhatsAppMessage('wa123','wa-send',{messaging_account_id:'other',type:'text'});
+  assert.equal(JSON.parse(h.calls.at(-1).options.body).messaging_account_id,'363434497629717');
+});
 await test('Provider key is excluded from Meta diagnostics and webhook-management requests',async()=>{
   const h=harness({WHATSAPP_SEND_TRANSPORT:'dualhook',DUALHOOK_RUNTIME_API_KEY:'dh_live_runtime_test_123456789'});const d=await h.c.metaMessagingCredentialStatus();assert.equal(d.whatsapp_send.transport,'dualhook');assert.equal(d.whatsapp_send.configured,true);
   assert(!h.calls.some(c=>c.url.includes(h.env.DUALHOOK_RUNTIME_API_KEY)||[...new Headers(c.options.headers).values()].some(value=>value.includes(h.env.DUALHOOK_RUNTIME_API_KEY))));
