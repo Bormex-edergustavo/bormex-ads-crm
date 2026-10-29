@@ -2035,6 +2035,7 @@ body[data-view="crm"] .topbar { display: none; }
 #crmView .message-receipt { display: inline-flex; opacity: 1; }
 #crmView .message-receipt svg { width: 16px; height: 14px; }
 #crmView .message-receipt.is-read { color: #53bdeb; }
+#crmView .message-bubble .message-delivery-error { margin-top: 8px; color: #a52232; font-size: 12px; line-height: 1.4; }
 #crmView .message-bubble.is-search-match { outline: 2px solid #e8b328; outline-offset: 2px; }
 #crmView .message-media-link, #crmView .message-video-card { max-width: min(340px, 100%); }
 #crmView .message-media-link img { max-height: 320px; object-fit: contain; }
@@ -4646,6 +4647,7 @@ function renderCrm() {
       return `${divider}<div class="message-bubble ${outbound ? "outbound" : "inbound"}">
         ${message.text && !/^\[(image|video|audio|document|sticker)\]$/i.test(message.text.trim()) ? `<p>${escapeHtml(message.text)}</p>` : ""}
         ${renderMessageAttachments(message.attachments, message)}
+        ${outbound && message.status === "failed" ? `<p class="message-delivery-error" role="status">${escapeHtml(message.deliveryError?.message || "Meta no entregó este mensaje. El contenido se conserva.")}</p>` : ""}
         <div class="message-meta"><time title="${escapeHtml(date.toLocaleString("es-MX"))}">${date.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}</time>${receipt}</div>
       </div>`;
     }).join("")

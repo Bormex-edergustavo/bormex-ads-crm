@@ -26,6 +26,15 @@ el rol y la salida. El botón + del mensaje abre archivos y el acceso a WhatsApp
 los límites y las rutas de envío se mantienen. Las marcas de entrega/lectura se
 muestran únicamente cuando el estado guardado de Meta las acredita.
 
+Las confirmaciones `sent`, `delivered`, `read` y `failed` de WhatsApp se guardan
+desde el webhook `messages`, comprobando firma HMAC, teléfono y WABA. Aplicar
+`supabase/migrations/20261029163401_whatsapp_delivery_receipts.sql` antes del
+backend: su RPC privado serializa escrituras por ID, conserva medios y texto y
+acepta confirmaciones anteriores a la respuesta de envío. Sólo `service_role`
+puede ejecutarlo. Un rechazo posterior aparece en la burbuja del mensaje.
+`tests/whatsapp-delivery.sql` comprueba las secuencias en Postgres dentro de una
+transacción que termina en rollback; no envía mensajes ni deja datos de prueba.
+
 ## Videos grandes y nombres de WhatsApp (28-oct-2026)
 
 Al seleccionar un video de WhatsApp de más de 16 MiB (hasta 100 MiB), el CRM

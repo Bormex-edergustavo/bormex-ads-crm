@@ -15,6 +15,12 @@ function harness(overrides={}) {
   const response=(x,status=200,headers={})=>new Response(JSON.stringify(x),{status,headers:{'content-type':'application/json',...headers}});
   const fetch=async(input,options={})=>{
     const url=new URL(input);const method=options.method||'GET';calls.push({url:String(url),method,options});
+    if(url.hostname==='storage.test'&&url.pathname==='/rest/v1/rpc/bormex_store_whatsapp_messages'){
+      const payload=JSON.parse(options.body);assert(Array.isArray(payload.p_messages));
+      // SQL merge/race behavior is covered separately against Postgres.
+      if(!payload.p_receipts)for(const item of payload.p_messages)tables.bormex_messages.set(item.id,item);
+      return response(payload.p_receipts?[]:payload.p_messages);
+    }
     if(url.hostname==='storage.test'&&url.pathname.startsWith('/rest/v1/')){
       const table=tables[url.pathname.split('/').at(-1)];assert(table,'Unknown table');
       if(method==='POST'){for(const row of JSON.parse(options.body))table.set(row.id||row.key,row.data||row.value);return response({});}
@@ -60,7 +66,7 @@ function harness(overrides={}) {
   };
   const c=vm.createContext({Deno:{env:{get:k=>env[k]},serve:f=>handler=f},fetch,URL,URLSearchParams,Request,Response,Headers,FormData,File,Blob,TextEncoder,TextDecoder,Uint8Array,ReadableStream,AbortSignal,crypto:webcrypto,atob,btoa,structuredClone,console:{error:(...args)=>errorLogs.push(args)}});
   vm.runInContext(stripTypeScriptTypes(source),c);
-  const request=(path,method='GET',body,auth=true)=>handler(new Request('https://crm.test/bormex-crm'+path,{method,headers:{...(auth?{authorization:'Basic '+btoa('panel:test-password')}:{})},body:body instanceof FormData?body:body?JSON.stringify(body):undefined}));
+  const request=(path,method='GET',body,auth=true,extraHeaders={})=>handler(new Request('https://crm.test/bormex-crm'+path,{method,headers:{...(auth?{authorization:'Basic '+btoa('panel:test-password')}:{ }),...extraHeaders},body:body instanceof FormData?body:body?JSON.stringify(body):undefined}));
   const upload=async(channel,type='image/png',name='foto.png',size=10)=>{
     const f=new FormData();f.set('channel',channel);f.set('conversationId',`${channel}_contact`);f.set('file',new File([new Uint8Array(size)],name,{type}));return request('/api/media/upload','POST',f);
   };
@@ -250,6 +256,28 @@ await test('Provider key is excluded from Meta diagnostics and webhook-managemen
   const h=harness({WHATSAPP_SEND_TRANSPORT:'dualhook',DUALHOOK_RUNTIME_API_KEY:'dh_live_runtime_test_123456789'});const d=await h.c.metaMessagingCredentialStatus();assert.equal(d.whatsapp_send.transport,'dualhook');assert.equal(d.whatsapp_send.configured,true);
   assert(!h.calls.some(c=>c.url.includes(h.env.DUALHOOK_RUNTIME_API_KEY)||[...new Headers(c.options.headers).values()].some(value=>value.includes(h.env.DUALHOOK_RUNTIME_API_KEY))));
   const before=h.calls.length;const r=await h.request('/api/meta/whatsapp/subscribe','POST',{});assert.equal(r.status,400);assert.equal(h.calls.length,before);
+});
+
+await test('WhatsApp receipts accept only the configured business phone/account and valid provider states',()=>{
+  const h=harness({WHATSAPP_BUSINESS_ACCOUNT_ID:'waba-test'});
+  const payload={entry:[{id:'waba-test',changes:[{field:'messages',value:{metadata:{phone_number_id:'wa123'},statuses:[
+    {id:'valid',status:'delivered',timestamp:'1793290000'},
+    {id:'failure',status:'failed',timestamp:'1793290001',errors:[{code:131047,message:'untrusted provider text'}]},
+    {id:'bad-time',status:'read',timestamp:'not-a-time'},{id:'bad-state',status:'deleted',timestamp:'1793290000'}
+  ]}}]}]};
+  const receipts=h.c.extractWhatsAppReceipts(payload);assert.equal(receipts.length,2);assert.equal(receipts[0].deliveredAt,'2026-10-29T16:06:40.000Z');assert.match(receipts[1].deliveryError.message,/24 horas/);assert(!JSON.stringify(receipts).includes('untrusted provider text'));
+  payload.entry[0].id='another-business';assert.equal(h.c.extractWhatsAppReceipts(payload).length,0);
+  payload.entry[0].id='waba-test';payload.entry[0].changes[0].value.metadata.phone_number_id='another-phone';assert.equal(h.c.extractWhatsAppReceipts(payload).length,0);
+});
+await test('Signed delivery callbacks persist receipts without creating conversations, leads, or sending another message',async()=>{
+  const h=harness({WHATSAPP_SEND_APP_SECRET:'new-app-secret'});
+  const body={entry:[{changes:[{field:'messages',value:{metadata:{phone_number_id:'wa123'},statuses:[{id:'message-from-api',status:'read',timestamp:'1793290000'}]}}]}]};
+  const key=await webcrypto.subtle.importKey('raw',new TextEncoder().encode('new-app-secret'),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+  const digest=await webcrypto.subtle.sign('HMAC',key,new TextEncoder().encode(JSON.stringify(body)));const signature='sha256='+Buffer.from(digest).toString('hex');
+  const unsigned=await h.request('/webhooks/whatsapp','POST',body,false);assert.equal(unsigned.status,200);assert.equal((await unsigned.json()).receipts,0);
+  const r=await h.request('/webhooks/whatsapp','POST',body,false,{'x-hub-signature-256':signature});assert.equal(r.status,200,await r.clone().text());assert.equal((await r.json()).receipts,1);
+  const rpc=h.calls.find(x=>x.url.endsWith('/rpc/bormex_store_whatsapp_messages'));assert(rpc);const sent=JSON.parse(rpc.options.body);assert.equal(sent.p_receipts,true);assert.equal(sent.p_messages[0].id,'message-from-api');assert.equal(sent.p_messages[0].status,'read');
+  assert.equal(h.tables.bormex_conversations.size,3);assert.equal(h.tables.bormex_messages.size,0);assert.equal(h.tables.bormex_leads.size,0);assert(!h.calls.some(x=>x.url.includes('graph.facebook.com')));
 });
 
 for(const check of checks)console.log(check.pass?'PASS':'FAIL',check.name,check.error||'');

@@ -184,6 +184,7 @@ Deno.serve(async (req) => {
       const message = await sendCrmMessage(body);
       await upsertItems("conversations", [message.conversation]);
       await upsertItems("messages", [message.record]);
+      message.record = await readItemById("messages", String(message.record.id)) || message.record;
       return json(messageDeltaState(message, accessRole));
     }
 
@@ -366,15 +367,19 @@ Deno.serve(async (req) => {
     }
 
     if (pathname === "/webhooks/whatsapp" && req.method === "POST") {
-      const body = await readVerifiedMetaJson(req);
+      const rawBody = await req.text();
+      await verifyMetaSignature(req, rawBody);
+      const body = rawBody ? JSON.parse(rawBody) : {};
       const payload = extractWhatsAppEvents(body);
+      const receipts = await verifyWhatsAppReceiptSignature(req, rawBody) ? extractWhatsAppReceipts(body) : [];
       await upsertItems("leads", payload.leads);
       await upsertItems("conversations", payload.conversations);
       await upsertItems("messages", payload.messages);
+      await storeWhatsAppMessages(receipts, true);
       const metaCapi = await sendWhatsAppLeadsToMetaCapi(body);
-      await rememberWebhookEvent("whatsapp", body, { ...payload, metaCapi });
+      await rememberWebhookEvent("whatsapp", body, { ...payload, receipts, metaCapi });
       await setSetting("lastWebhookAt", new Date().toISOString());
-      return json({ ok: true, leads: payload.leads.length, messages: payload.messages.length, metaCapi });
+      return json({ ok: true, leads: payload.leads.length, messages: payload.messages.length, receipts: receipts.length, metaCapi });
     }
 
     if (pathname === "/webhooks/meta" && req.method === "GET") {
@@ -793,7 +798,7 @@ function clampInteger(value: unknown, min: number, max: number, fallback: number
 }
 
 async function readSettings() {
-  const params = new URLSearchParams({ select: "key,value", key: "not.like.crmUpload:*" });
+  const params = new URLSearchParams({ select: "key,value", and: "(key.not.like.crmUpload:*,key.not.like.whatsappReceipt:*)" });
   const response = await supabaseFetch(`/rest/v1/bormex_settings?${params}`);
   const rows = await response.json();
   if (!response.ok) throw new Error(rows.message || "No se pudo leer configuración");
@@ -817,6 +822,13 @@ async function upsertItems(
   if (!items.length) return;
   const table = tableMap[collection];
   const compacted = compactItemsById(items);
+  if (collection === "messages") {
+    const whatsapp = compacted.filter((item) => item.channel === "whatsapp");
+    await storeWhatsAppMessages(whatsapp);
+    const other = compacted.filter((item) => item.channel !== "whatsapp");
+    if (!other.length) return;
+    compacted.splice(0, compacted.length, ...other);
+  }
   const existing = collection === "conversations"
     ? existingOverride ?? await readItemsByIds("conversations", compacted.map((item) => String(item.id || "")))
     : [];
@@ -832,6 +844,17 @@ async function upsertItems(
     body: JSON.stringify(rows),
   });
   if (!response.ok) throw new Error((await response.json()).message || `No se pudo guardar ${collection}`);
+}
+
+async function storeWhatsAppMessages(messages: Array<Record<string, unknown>>, receipts = false) {
+  if (!messages.length) return;
+  for (let offset = 0; offset < messages.length; offset += 100) {
+    const response = await supabaseFetch("/rest/v1/rpc/bormex_store_whatsapp_messages", {
+      method: "POST",
+      body: JSON.stringify({ p_messages: messages.slice(offset, offset + 100), p_receipts: receipts }),
+    });
+    if (!response.ok) throw new Error((await response.json()).message || "No se pudo guardar el estado de WhatsApp");
+  }
 }
 
 function compactItemsById(items: Array<Record<string, unknown>>) {
@@ -2369,6 +2392,38 @@ function normalizeReferralAttribution(referral: any, source: string) {
     sourceUrl,
     attributionSource: source,
   };
+}
+
+function extractWhatsAppReceipts(payload: any) {
+  const receipts: Array<Record<string, unknown>> = [];
+  const phoneId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID") || "";
+  const wabaId = Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID") || "";
+  for (const entry of payload.entry || []) {
+    if (wabaId && String(entry.id || "") !== wabaId) continue;
+    for (const change of entry.changes || []) {
+      if (change.field !== "messages" || !phoneId || String(change.value?.metadata?.phone_number_id || "") !== phoneId) continue;
+      for (const item of change.value?.statuses || []) {
+        if (!item.id || !["sent", "delivered", "read", "failed"].includes(item.status)) continue;
+        const seconds = Number(item.timestamp);
+        if (!Number.isFinite(seconds) || seconds <= 0 || !Number.isFinite(new Date(seconds * 1000).getTime())) continue;
+        const at = new Date(seconds * 1000).toISOString();
+        const code = Number(item.errors?.[0]?.code || 0);
+        receipts.push({
+          id: String(item.id), status: item.status, [`${item.status}At`]: at,
+          ...(item.status === "failed" ? { deliveryError: { code, message: whatsappDeliveryErrorMessage(code) } } : {}),
+        });
+      }
+    }
+  }
+  return receipts;
+}
+
+function whatsappDeliveryErrorMessage(code: number) {
+  if (code === 131047) return "Meta no lo entregó: terminó el plazo de 24 horas para responder. Pide al contacto que escriba de nuevo o utiliza una plantilla aprobada.";
+  if ([131042, 141006].includes(code)) return "Meta no lo entregó por un problema con el método de pago de la cuenta de WhatsApp Bormex.";
+  if (code === 131026) return "WhatsApp no pudo entregar el mensaje al destinatario.";
+  if (code === 131053) return "Meta no pudo descargar o procesar el archivo adjunto.";
+  return `Meta no entregó el mensaje${code ? ` (código ${code})` : ""}. El contenido se conserva en este chat.`;
 }
 
 function extractWhatsAppEvents(payload: any) {
@@ -4048,7 +4103,7 @@ function maskValue(value: string) {
 async function rememberWebhookEvent(
   source: string,
   body: any,
-  parsed: { leads?: unknown[]; messages?: unknown[]; conversations?: unknown[]; metaCapi?: unknown },
+  parsed: { leads?: unknown[]; messages?: unknown[]; conversations?: unknown[]; receipts?: any[]; metaCapi?: unknown },
 ) {
   const settings = await readSettings();
   const entry = {
@@ -4061,6 +4116,7 @@ async function rememberWebhookEvent(
     leads: parsed.leads?.length || 0,
     messages: parsed.messages?.length || 0,
     conversations: parsed.conversations?.length || 0,
+    receipts: (parsed.receipts || []).map((item: any) => ({ id: item.id, status: item.status, code: item.deliveryError?.code || undefined })),
     metaCapi: parsed.metaCapi || null,
     sample: summarizeWebhookPayload(body),
   };
@@ -4102,6 +4158,22 @@ async function readVerifiedMetaJson(req: Request) {
   const textBody = await req.text();
   await verifyMetaSignature(req, textBody);
   return textBody ? JSON.parse(textBody) : {};
+}
+
+async function verifyWhatsAppReceiptSignature(req: Request, rawBody: string) {
+  const signature = req.headers.get("x-hub-signature-256") || "";
+  if (!/^sha256=[a-f0-9]{64}$/i.test(signature)) return false;
+  const secrets = [...new Set([
+    Deno.env.get("WHATSAPP_SEND_APP_SECRET"),
+    Deno.env.get("WHATSAPP_MEDIA_APP_SECRET"),
+    metaAppSecret(),
+  ].filter(Boolean))] as string[];
+  for (const secret of secrets) {
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const actual = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody)));
+    if (constantTimeEqual(actual, hexToBytes(signature.slice(7)))) return true;
+  }
+  return false;
 }
 
 async function verifyMetaSignature(req: Request, rawBody: string) {

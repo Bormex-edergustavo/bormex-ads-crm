@@ -2029,6 +2029,7 @@ function renderCrm() {
       return `${divider}<div class="message-bubble ${outbound ? "outbound" : "inbound"}">
         ${message.text && !/^\[(image|video|audio|document|sticker)\]$/i.test(message.text.trim()) ? `<p>${escapeHtml(message.text)}</p>` : ""}
         ${renderMessageAttachments(message.attachments, message)}
+        ${outbound && message.status === "failed" ? `<p class="message-delivery-error" role="status">${escapeHtml(message.deliveryError?.message || "Meta no entregó este mensaje. El contenido se conserva.")}</p>` : ""}
         <div class="message-meta"><time title="${escapeHtml(date.toLocaleString("es-MX"))}">${date.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}</time>${receipt}</div>
       </div>`;
     }).join("")
